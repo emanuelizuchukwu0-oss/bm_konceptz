@@ -171,22 +171,30 @@ document.addEventListener('DOMContentLoaded', function () {
   // =====================================================
   // 1) ONLINE USERS — now shows names + roles
   // =====================================================
-  socket.on('online_users', (users) => {
-    const box = document.getElementById('onlineList');
-    if (!box) return;
+function renderOnlineList(users) {
+  const box = document.getElementById('onlineList');
+  if (!box) return;
 
-    if (!users || !users.length) {
-      box.innerHTML = '<em style="color:#888;">No one is online right now.</em>';
-      return;
-    }
+  if (!users || !users.length) {
+    box.innerHTML = '<em style="color:#888;">No one is online right now.</em>';
+    return;
+  }
 
-    box.innerHTML = users.map(u =>
-      `<div style="padding:6px 0;border-bottom:1px solid #2a2a30;display:flex;justify-content:space-between;">
-         <strong>${u.name}</strong>
-         <span style="color:#888;font-size:12px;">${u.role}</span>
-       </div>`
-    ).join('');
-  });
+  box.innerHTML = users.map(u =>
+    `<div style="padding:6px 0;border-bottom:1px solid #2a2a30;display:flex;justify-content:space-between;">
+       <strong>${u.name || 'Unknown'}</strong>
+       <span style="color:#888;font-size:12px;">${u.role || ''}</span>
+     </div>`
+  ).join('');
+}
+
+window.onSocketReady(() => {
+  socket.on('online_users', renderOnlineList);
+
+  // Show whatever's cached immediately, then refresh
+  if (window.__onlineUsers) renderOnlineList(window.__onlineUsers);
+  socket.emit('request_online_users');
+});
 
   // =====================================================
   // 2) DASHBOARD REFRESH — pull fresh stats without reload
