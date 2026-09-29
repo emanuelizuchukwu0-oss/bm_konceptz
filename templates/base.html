@@ -65,7 +65,7 @@
   .badge-locked { background: #3d1a1a; color: #f08080; }
   .badge-pending { background: #3d2f1a; color: #f0b429; }
   .progress-bar { height: 8px; background: #2a2a30; border-radius: 4px; overflow: hidden; margin: 8px 0; }
-  .progress-fill { height: 100%; background: #f0b429; }
+  .progress-fill { height: 100%; background: #f0b429; transition: width 0.4s ease; }
   @media (max-width: 600px) {
     nav a { margin-left: 10px; font-size: 12px; }
     main { padding: 14px; }
@@ -75,39 +75,67 @@
 <body>
 
 {# ============================================================ #}
-{# Socket.IO loads FIRST so every page's scripts can use it.    #}
+{# GLOBAL SOCKET + HELPERS — runs before every page script      #}
 {# ============================================================ #}
 {% if current_user.is_authenticated %}
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <script>
-  window.appSocket = io();
+  // ----- Socket with auto-reconnect -----
+  window.appSocket = io({
+    transports: ['websocket', 'polling'],
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+    timeout: 20000
+  });
+
+  window.socketReady = false;
+  window.__socketReadyCallbacks = [];
+  window.__onlineUsers = [];
+  window.__inCall = false;
+
+  // Helper pages use to run code once the socket is connected
+  window.onSocketReady = function (fn) {
+    if (window.socketReady) {
+      try { fn(); } catch (e) { console.error(e); }
+    } else {
+      window.__socketReadyCallbacks.push(fn);
+    }
+  };
 
   window.appSocket.on('connect', () => {
     console.log('[socket] connected:', window.appSocket.id);
+    window.socketReady = true;
 
-    // ---- Late-joiner replay: fetch any pending events ----
+    // Run any queued "ready" callbacks
+    const callbacks = window.__socketReadyCallbacks.slice();
+    window.__socketReadyCallbacks.length = 0;
+    callbacks.forEach(fn => { try { fn(); } catch (e) { console.error(e); } });
+
+    // Ask for online users right away
+    window.appSocket.emit('request_online_users');
+
+    // Replay pending events (attendance window + ringing call)
     fetch('/api/pending-events')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!data) return;
-
-        // Student: attendance window still open?
         if (data.attendance) {
-          console.log('[boot] replayed attendance', data.attendance);
-          window.dispatchEvent(new CustomEvent('attendance_pending', {
-            detail: data.attendance
-          }));
+          window.dispatchEvent(new CustomEvent('attendance_pending',
+            { detail: data.attendance }));
         }
-
-        // Incoming ringing call?
         if (data.incoming_call) {
-          console.log('[boot] replayed incoming call', data.incoming_call);
-          window.dispatchEvent(new CustomEvent('call_pending', {
-            detail: data.incoming_call
-          }));
+          window.dispatchEvent(new CustomEvent('call_pending',
+            { detail: data.incoming_call }));
         }
       })
       .catch(err => console.error('[boot] pending-events failed', err));
+  });
+
+  window.appSocket.on('disconnect', (reason) => {
+    console.warn('[socket] disconnected:', reason);
+    window.socketReady = false;
   });
 
   window.appSocket.on('connect_error', (err) => {
@@ -115,9 +143,12 @@
   });
 
   window.CURRENT_USER_ROLE = "{{ current_user.role }}";
+  window.CURRENT_USER_ID   = Number({{ current_user.user_id | tojson }});
 
-  // ---- Online pill in nav (teachers/admins only) ----
+  // ----- Cache every online_users payload + update the nav pill -----
   window.appSocket.on('online_users', (users) => {
+    window.__onlineUsers = users || [];
+
     const pill = document.getElementById('studentOnlineCount');
     if (!pill) return;
 
@@ -126,7 +157,7 @@
       return;
     }
 
-    const students = (users || []).filter(u => u.role === 'student');
+    const students = window.__onlineUsers.filter(u => u.role === 'student');
     if (!students.length) {
       pill.style.display = 'none';
       return;
@@ -150,7 +181,7 @@
 </header>
 
 {# ============================================================ #}
-{# LIVE CALL BANNER — shown to any user with a ringing call      #}
+{# LIVE CALL BANNER                                             #}
 {# ============================================================ #}
 {% if current_user.is_authenticated %}
 <div id="liveCallBanner"
@@ -175,7 +206,7 @@
 </main>
 
 {# ============================================================ #}
-{# Student-only: attendance check-in overlay                    #}
+{# STUDENT: attendance overlay                                  #}
 {# ============================================================ #}
 {% if current_user.is_authenticated and current_user.role == 'student' %}
 <div id="attendanceOverlay" style="display:none;position:fixed;inset:0;
@@ -196,106 +227,88 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-  const socket = window.appSocket;
-  if (!socket) {
-    console.error('[attendance] window.appSocket not available');
-    return;
-  }
+  window.onSocketReady(function () {
+    const socket = window.appSocket;
 
-  let currentSessionId = null;
-  const overlay = document.getElementById('attendanceOverlay');
-  const info    = document.getElementById('attInfo');
-  const markBtn = document.getElementById('attMarkBtn');
-  const msgEl   = document.getElementById('attMsg');
+    let currentSessionId = null;
+    const overlay = document.getElementById('attendanceOverlay');
+    const info    = document.getElementById('attInfo');
+    const markBtn = document.getElementById('attMarkBtn');
+    const msgEl   = document.getElementById('attMsg');
 
-  function showOverlay(data) {
-    console.log('[attendance] showing overlay', data);
-    currentSessionId = Number(data.session_id);
-    info.innerHTML = `<strong>Week ${data.week_number} — ${data.title}</strong><br>${data.date}`;
-    msgEl.style.display = 'none';
-    msgEl.style.color = '#6ee7a7';
-    markBtn.disabled = false;
-    markBtn.textContent = "✅ I'm Here";
-    overlay.style.display = 'flex';
-  }
-
-  // Live path — teacher just tapped "Take Attendance"
-  socket.on('attendance_requested', (data) => showOverlay(data));
-
-  // Replay path — student just logged in, window is still open
-  window.addEventListener('attendance_pending', (e) => showOverlay(e.detail));
-
-  // Also listen for the closed event so we can hide the overlay
-  socket.on('attendance_closed', () => {
-    if (overlay.style.display === 'flex') {
-      overlay.style.display = 'none';
-    }
-  });
-
-  markBtn.addEventListener('click', async () => {
-    if (!currentSessionId) return;
-    markBtn.disabled = true;
-    markBtn.textContent = 'Marking…';
-
-    let res;
-    try {
-      res = await fetch('/attendance/self-mark', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ session_id: currentSessionId })
-      });
-    } catch (netErr) {
-      console.error('network fail:', netErr);
-      msgEl.style.color = '#f08080';
-      msgEl.textContent = 'Could not reach the server. Are you connected?';
-      msgEl.style.display = 'block';
+    function showOverlay(data) {
+      currentSessionId = Number(data.session_id);
+      info.innerHTML = `<strong>Week ${data.week_number} — ${data.title}</strong><br>${data.date}`;
+      msgEl.style.display = 'none';
+      msgEl.style.color = '#6ee7a7';
       markBtn.disabled = false;
       markBtn.textContent = "✅ I'm Here";
-      return;
+      overlay.style.display = 'flex';
     }
 
-    if (!res.ok) {
-      const text = await res.text();
-      console.error('server error', res.status, text);
-      msgEl.style.color = '#f08080';
-      msgEl.textContent = `Server error (${res.status}). Please tell your teacher.`;
+    socket.on('attendance_requested', showOverlay);
+    socket.on('attendance_closed', () => { overlay.style.display = 'none'; });
+    window.addEventListener('attendance_pending', (e) => showOverlay(e.detail));
+
+    markBtn.addEventListener('click', async () => {
+      if (!currentSessionId) return;
+      markBtn.disabled = true;
+      markBtn.textContent = 'Marking…';
+
+      let res;
+      try {
+        res = await fetch('/attendance/self-mark', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ session_id: currentSessionId })
+        });
+      } catch (netErr) {
+        msgEl.style.color = '#f08080';
+        msgEl.textContent = 'Could not reach the server.';
+        msgEl.style.display = 'block';
+        markBtn.disabled = false;
+        markBtn.textContent = "✅ I'm Here";
+        return;
+      }
+
+      if (!res.ok) {
+        msgEl.style.color = '#f08080';
+        msgEl.textContent = `Server error (${res.status}).`;
+        msgEl.style.display = 'block';
+        markBtn.disabled = false;
+        markBtn.textContent = "✅ I'm Here";
+        return;
+      }
+
+      let data;
+      try { data = await res.json(); }
+      catch { 
+        msgEl.textContent = 'Unexpected server response.'; 
+        msgEl.style.display = 'block';
+        markBtn.disabled = false; 
+        markBtn.textContent = "✅ I'm Here";
+        return;
+      }
+
+      msgEl.style.color = '#6ee7a7';
+      msgEl.textContent = data.already
+        ? 'You were already marked Present.'
+        : 'Attendance recorded. Thank you!';
       msgEl.style.display = 'block';
-      markBtn.disabled = false;
-      markBtn.textContent = "✅ I'm Here";
-      return;
-    }
-
-    let data;
-    try {
-      data = await res.json();
-    } catch (parseErr) {
-      console.error('bad json:', parseErr);
-      msgEl.style.color = '#f08080';
-      msgEl.textContent = 'Unexpected server response.';
-      msgEl.style.display = 'block';
-      markBtn.disabled = false;
-      markBtn.textContent = "✅ I'm Here";
-      return;
-    }
-
-    msgEl.style.color = '#6ee7a7';
-    msgEl.textContent = data.already
-      ? 'You were already marked Present for this session.'
-      : 'Attendance recorded. Thank you!';
-    msgEl.style.display = 'block';
-    markBtn.textContent = '✅ Marked';
-    setTimeout(() => { overlay.style.display = 'none'; }, 1800);
+      markBtn.textContent = '✅ Marked';
+      setTimeout(() => { overlay.style.display = 'none'; }, 1800);
+    });
   });
 });
 </script>
 {% endif %}
 
 {# ============================================================ #}
-{# Global live-call banner controller                            #}
+{# GLOBAL LIVE-CALL BANNER controller                           #}
 {# ============================================================ #}
 {% if current_user.is_authenticated %}
 <script>
-(function () {
+document.addEventListener('DOMContentLoaded', function () {
   const banner = document.getElementById('liveCallBanner');
   const btn    = document.getElementById('liveCallJoinBtn');
   if (!banner || !btn) return;
@@ -304,26 +317,100 @@ document.addEventListener('DOMContentLoaded', function () {
     banner.style.display = 'block';
     banner.dataset.callId = callInfo.call_id;
     banner.dataset.fromId = callInfo.from_id;
-    // Just route the student to their chat list; they'll see the
-    // incoming-call modal in the thread and can accept from there.
     btn.href = "{{ url_for('chat_home') }}";
   }
 
-  function hideBanner() {
-    banner.style.display = 'none';
-  }
+  function hideBanner() { banner.style.display = 'none'; }
 
-  // Replay path — a call is already ringing when the page loads
   window.addEventListener('call_pending', (e) => showBanner(e.detail));
 
-  // Live path — a call arrives while we're on any page
-  if (window.appSocket) {
-    window.appSocket.on('incoming_call', (data) => showBanner(data));
+  window.onSocketReady(function () {
+    window.appSocket.on('incoming_call', showBanner);
     window.appSocket.on('call_declined', hideBanner);
     window.appSocket.on('call_ended', hideBanner);
     window.appSocket.on('call_accepted', hideBanner);
+  });
+});
+</script>
+{% endif %}
+
+{# ============================================================ #}
+{# AUTO-REFRESH POLLER — 5 second tick, skips typing + calls    #}
+{# ============================================================ #}
+{% if current_user.is_authenticated %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const REFRESH_MS = 5000;
+
+  function isTyping() {
+    const el = document.activeElement;
+    if (!el) return false;
+    const tag = el.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable;
   }
-})();
+
+  function isInCall() {
+    return window.__inCall === true;
+  }
+
+  function isHidden() {
+    return document.hidden === true;
+  }
+
+  async function tick() {
+    if (isInCall() || isTyping() || isHidden()) return;
+
+    try {
+      // ---- Student dashboard ----
+      if (window.CURRENT_USER_ROLE === 'student' &&
+          document.getElementById('attendancePct')) {
+        const r = await fetch('/api/my-attendance', { cache: 'no-store' });
+        if (r.ok) {
+          const s = await r.json();
+          const set = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+          set('attendancePct', s.attendance_pct + '%');
+          set('attendanceDetail', `Present: ${s.present} / ${s.total_sessions}`);
+          set('progressValue', s.progress + '%');
+          set('avgScore', (s.avg_score || 0) + '%');
+          const fill = document.getElementById('progressFill');
+          if (fill) fill.style.width = s.progress + '%';
+        }
+      }
+
+      // ---- Teacher / admin dashboard ----
+      if ((window.CURRENT_USER_ROLE === 'teacher' || window.CURRENT_USER_ROLE === 'admin') &&
+          document.getElementById('statTotal')) {
+        const r = await fetch('/api/teacher-stats', { cache: 'no-store' });
+        if (r.ok) {
+          const s = await r.json();
+          const set = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+          set('statTotal', s.total);
+          set('statActive', s.active_count);
+          set('statLocked', s.locked_count);
+          set('statSubmissions', s.submitted_count);
+          set('statPending', s.pending_count);
+          set('statPresent', s.present_today);
+          set('statAbsent', s.absent_today);
+          set('statAttLabel', 'Attendance #' + s.session_index);
+          if (s.current_session) {
+            set('statAttSession',
+              `Week ${s.current_session.week_number} · Day ${s.current_session.day_index}`);
+          }
+        }
+
+        // Also refresh the online list every 5s as a safety net
+        if (window.appSocket && window.appSocket.connected) {
+          window.appSocket.emit('request_online_users');
+        }
+      }
+    } catch (err) {
+      console.warn('[auto-refresh] tick failed', err);
+    }
+  }
+
+  setInterval(tick, REFRESH_MS);
+  setTimeout(tick, 800);
+});
 </script>
 {% endif %}
 
