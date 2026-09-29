@@ -1126,6 +1126,39 @@ def send_message(conversation_id):
 
     return jsonify({'ok': True, 'message_id': msg.message_id})
 
+@app.route('/healthz')
+def healthz():
+    from sqlalchemy import inspect
+    import traceback
+
+    # 1) What DB is in use?
+    uri = app.config['SQLALCHEMY_DATABASE_URI']
+    scheme = uri.split('://')[0] if '://' in uri else 'unknown'
+
+    # 2) Can we talk to it?
+    db_ok = False
+    db_err = None
+    tables = []
+    try:
+        with app.app_context():
+            db.session.execute(db.text('SELECT 1'))
+            insp = inspect(db.engine)
+            tables = insp.get_table_names()
+        db_ok = True
+    except Exception as e:
+        db_err = ''.join(traceback.format_exception_only(type(e), e)).strip()
+
+    # 3) Is SECRET_KEY set?
+    secret_set = app.config['SECRET_KEY'] != 'change-this-in-production-please'
+
+    return jsonify({
+        'db_scheme': scheme,
+        'db_ok': db_ok,
+        'db_error': db_err,
+        'tables': tables,
+        'secret_set': secret_set,
+    })
+
 
 # ------------------------------------------------------------------
 # SOCKETIO
