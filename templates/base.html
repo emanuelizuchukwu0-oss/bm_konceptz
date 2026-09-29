@@ -74,6 +74,9 @@
 </head>
 <body>
 
+{# ============================================================ #}
+{# GLOBAL SOCKET + PAGE HELPERS                                 #}
+{# ============================================================ #}
 {% if current_user.is_authenticated %}
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <script>
@@ -81,7 +84,7 @@
   // Global socket with auto-reconnect tuning
   // =========================================================
   window.appSocket = io({
-    transports: ['websocket', 'polling'],   // try WS first
+    transports: ['websocket', 'polling'],
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
@@ -90,17 +93,31 @@
   });
 
   window.socketReady = false;
+  window.__socketReadyCallbacks = [];
+  window.__onlineUsers = [];
+  window.__inCall = false;
+
+  window.onSocketReady = function (fn) {
+    if (window.socketReady) {
+      try { fn(); } catch (e) { console.error(e); }
+    } else {
+      window.__socketReadyCallbacks.push(fn);
+    }
+  };
 
   window.appSocket.on('connect', () => {
     console.log('[socket] connected:', window.appSocket.id);
     window.socketReady = true;
 
-    // Fire any queued "on ready" callbacks (page scripts that
-    // attached their listeners before the socket connected)
-    (window.__socketReadyCallbacks || []).forEach(fn => {
+    // Fire any queued "on ready" callbacks
+    const callbacks = window.__socketReadyCallbacks.slice();
+    window.__socketReadyCallbacks.length = 0;
+    callbacks.forEach(fn => {
       try { fn(); } catch (e) { console.error(e); }
     });
-    window.__socketReadyCallbacks = [];
+
+    // Ask for online users right away
+    window.appSocket.emit('request_online_users');
 
     // Fetch any pending events (attendance window + ringing call)
     fetch('/api/pending-events')
@@ -128,12 +145,6 @@
     console.error('[socket] connect_error:', err.message);
   });
 
-  // Helper pages can call to run code once the socket is ready
-  window.onSocketReady = function (fn) {
-    if (window.socketReady) fn();
-    else (window.__socketReadyCallbacks = window.__socketReadyCallbacks || []).push(fn);
-  };
-
   window.CURRENT_USER_ROLE = "{{ current_user.role }}";
 
   // =========================================================
@@ -157,98 +168,87 @@
     pill.style.display = 'inline-block';
   }
 
-  window.appSocket.on('online_users', updateOnlinePill);
-
-  // Ask for the list as soon as the socket is up
-  window.appSocket.on('connect', () => {
-    window.appSocket.emit('request_online_users');
-  });
-
-  // Store the latest list on window so pages can read it any time
+  // Store the latest list + update the pill
   window.appSocket.on('online_users', (users) => {
     window.__onlineUsers = users || [];
+    updateOnlinePill(window.__onlineUsers);
   });
-  
-// =========================================================
-// Auto-refresh poller — updates page data without reloading
-// =========================================================
-(function () {
-  const REFRESH_MS = 5000;
 
-  function inCall() {
-    // Set by chat_thread.html while a call is active
-    return window.__inCall === true;
-  }
+  // =========================================================
+  // Auto-refresh poller — updates page data without reloading
+  // =========================================================
+  (function () {
+    const REFRESH_MS = 5000;
 
-  function typingOrFocused() {
-    // Don't refresh while the user is typing in a chat box
-    const el = document.activeElement;
-    if (!el) return false;
-    const tag = el.tagName;
-    return tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable;
-  }
+    function inCall() {
+      return window.__inCall === true;
+    }
 
-  async function tick() {
-    if (inCall()) return;              // never disturb a live call
-    if (typingOrFocused()) return;     // never disrupt typing
+    function typingOrFocused() {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable;
+    }
 
-    try {
-      // --- Student dashboard numbers ---
-      if (document.getElementById('attendancePct') &&
-          window.CURRENT_USER_ROLE === 'student') {
-        const r = await fetch('/api/my-attendance', { cache: 'no-store' });
-        if (r.ok) {
-          const s = await r.json();
-          document.getElementById('attendancePct').textContent = s.attendance_pct + '%';
-          document.getElementById('attendanceDetail').textContent =
-            `Present: ${s.present} / ${s.total_sessions}`;
-          document.getElementById('progressValue').textContent = s.progress + '%';
-          document.getElementById('progressFill').style.width = s.progress + '%';
-          const avgEl = document.getElementById('avgScore');
-          if (avgEl) avgEl.textContent = (s.avg_score || 0) + '%';
-        }
-      }
+    async function tick() {
+      if (inCall()) return;
+      if (typingOrFocused()) return;
 
-      // --- Teacher dashboard numbers ---
-      if (document.getElementById('statTotal') &&
-          (window.CURRENT_USER_ROLE === 'teacher' ||
-           window.CURRENT_USER_ROLE === 'admin')) {
-        const r = await fetch('/api/teacher-stats', { cache: 'no-store' });
-        if (r.ok) {
-          const s = await r.json();
-          document.getElementById('statTotal').textContent = s.total;
-          document.getElementById('statActive').textContent = s.active_count;
-          document.getElementById('statLocked').textContent = s.locked_count;
-          document.getElementById('statSubmissions').textContent = s.submitted_count;
-          document.getElementById('statPending').textContent = s.pending_count;
-          document.getElementById('statPresent').textContent = s.present_today;
-          document.getElementById('statAbsent').textContent = s.absent_today;
-          document.getElementById('statAttLabel').textContent =
-            'Attendance #' + s.session_index;
-          const sessEl = document.getElementById('statAttSession');
-          if (sessEl && s.current_session) {
-            sessEl.textContent =
-              `Week ${s.current_session.week_number} · Day ${s.current_session.day_index}`;
+      try {
+        // --- Student dashboard numbers ---
+        if (document.getElementById('attendancePct') &&
+            window.CURRENT_USER_ROLE === 'student') {
+          const r = await fetch('/api/my-attendance', { cache: 'no-store' });
+          if (r.ok) {
+            const s = await r.json();
+            document.getElementById('attendancePct').textContent = s.attendance_pct + '%';
+            document.getElementById('attendanceDetail').textContent =
+              `Present: ${s.present} / ${s.total_sessions}`;
+            document.getElementById('progressValue').textContent = s.progress + '%';
+            document.getElementById('progressFill').style.width = s.progress + '%';
+            const avgEl = document.getElementById('avgScore');
+            if (avgEl) avgEl.textContent = (s.avg_score || 0) + '%';
           }
         }
 
-        // Also refresh the online-users list
-        if (window.appSocket && window.appSocket.connected) {
-          window.appSocket.emit('request_online_users');
+        // --- Teacher dashboard numbers ---
+        if (document.getElementById('statTotal') &&
+            (window.CURRENT_USER_ROLE === 'teacher' ||
+             window.CURRENT_USER_ROLE === 'admin')) {
+          const r = await fetch('/api/teacher-stats', { cache: 'no-store' });
+          if (r.ok) {
+            const s = await r.json();
+            document.getElementById('statTotal').textContent = s.total;
+            document.getElementById('statActive').textContent = s.active_count;
+            document.getElementById('statLocked').textContent = s.locked_count;
+            document.getElementById('statSubmissions').textContent = s.submitted_count;
+            document.getElementById('statPending').textContent = s.pending_count;
+            document.getElementById('statPresent').textContent = s.present_today;
+            document.getElementById('statAbsent').textContent = s.absent_today;
+            document.getElementById('statAttLabel').textContent =
+              'Attendance #' + s.session_index;
+            const sessEl = document.getElementById('statAttSession');
+            if (sessEl && s.current_session) {
+              sessEl.textContent =
+                `Week ${s.current_session.week_number} · Day ${s.current_session.day_index}`;
+            }
+          }
+
+          if (window.appSocket && window.appSocket.connected) {
+            window.appSocket.emit('request_online_users');
+          }
         }
+      } catch (err) {
+        console.warn('[auto-refresh] tick failed', err);
       }
-    } catch (err) {
-      console.warn('[auto-refresh] tick failed', err);
     }
-  }
 
-  // Run every 5s
-  setInterval(tick, REFRESH_MS);
-
-  // Run once on load, so page opens fresh
-  setTimeout(tick, 800);
-})();
+    setInterval(tick, REFRESH_MS);
+    setTimeout(tick, 800);
+  })();
 </script>
+{% endif %}
 
 <header>
   <h1>📸 BM_<span>KONCEPTZ</span></h1>
@@ -263,7 +263,7 @@
 </header>
 
 {# ============================================================ #}
-{# LIVE CALL BANNER — shown to any user with a ringing call      #}
+{# LIVE CALL BANNER                                             #}
 {# ============================================================ #}
 {% if current_user.is_authenticated %}
 <div id="liveCallBanner"
@@ -309,17 +309,12 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-  const socket = window.appSocket;
-  if (!socket) {
-    console.error('[attendance] window.appSocket not available');
-    return;
-  }
-
-  let currentSessionId = null;
   const overlay = document.getElementById('attendanceOverlay');
   const info    = document.getElementById('attInfo');
   const markBtn = document.getElementById('attMarkBtn');
   const msgEl   = document.getElementById('attMsg');
+
+  let currentSessionId = null;
 
   function showOverlay(data) {
     console.log('[attendance] showing overlay', data);
@@ -332,17 +327,18 @@ document.addEventListener('DOMContentLoaded', function () {
     overlay.style.display = 'flex';
   }
 
-  // Live path — teacher just tapped "Take Attendance"
-  socket.on('attendance_requested', (data) => showOverlay(data));
-
   // Replay path — student just logged in, window is still open
   window.addEventListener('attendance_pending', (e) => showOverlay(e.detail));
 
-  // Also listen for the closed event so we can hide the overlay
-  socket.on('attendance_closed', () => {
-    if (overlay.style.display === 'flex') {
-      overlay.style.display = 'none';
-    }
+  // Live path — needs the socket
+  window.onSocketReady(function () {
+    const socket = window.appSocket;
+    socket.on('attendance_requested', (data) => showOverlay(data));
+    socket.on('attendance_closed', () => {
+      if (overlay.style.display === 'flex') {
+        overlay.style.display = 'none';
+      }
+    });
   });
 
   markBtn.addEventListener('click', async () => {
@@ -404,7 +400,7 @@ document.addEventListener('DOMContentLoaded', function () {
 {% endif %}
 
 {# ============================================================ #}
-{# Global live-call banner controller                            #}
+{# Global live-call banner controller                           #}
 {# ============================================================ #}
 {% if current_user.is_authenticated %}
 <script>
@@ -417,8 +413,6 @@ document.addEventListener('DOMContentLoaded', function () {
     banner.style.display = 'block';
     banner.dataset.callId = callInfo.call_id;
     banner.dataset.fromId = callInfo.from_id;
-    // Just route the student to their chat list; they'll see the
-    // incoming-call modal in the thread and can accept from there.
     btn.href = "{{ url_for('chat_home') }}";
   }
 
@@ -429,13 +423,13 @@ document.addEventListener('DOMContentLoaded', function () {
   // Replay path — a call is already ringing when the page loads
   window.addEventListener('call_pending', (e) => showBanner(e.detail));
 
-  // Live path — a call arrives while we're on any page
-  if (window.appSocket) {
-    window.appSocket.on('incoming_call', (data) => showBanner(data));
+  // Live path — needs the socket
+  window.onSocketReady(function () {
+    window.appSocket.on('incoming_call', showBanner);
     window.appSocket.on('call_declined', hideBanner);
     window.appSocket.on('call_ended', hideBanner);
     window.appSocket.on('call_accepted', hideBanner);
-  }
+  });
 })();
 </script>
 {% endif %}
