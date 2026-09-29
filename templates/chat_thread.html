@@ -409,15 +409,21 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   // ---- Signaling ----
-  socket.on('incoming_call', (data) => {
-    currentCall = {
-      peerId: Number(data.from_id),
-      callId: Number(data.call_id),
-      isCaller: false
-    };
-    document.getElementById('callerName').textContent = data.from_name;
-    incomingModal.style.display = 'flex';
-  });
+function showIncomingModal(data) {
+  currentCall = {
+    peerId: Number(data.from_id),
+    callId: Number(data.call_id),
+    isCaller: false
+  };
+  document.getElementById('callerName').textContent = data.from_name;
+  incomingModal.style.display = 'flex';
+}
+
+// Live path — call arrives while we're on the page
+socket.on('incoming_call', (data) => showIncomingModal(data));
+
+// Replay path — we just logged in and a call is already ringing
+window.addEventListener('call_pending', (e) => showIncomingModal(e.detail));
 
   socket.on('call_accepted', async () => {
     createPeer();

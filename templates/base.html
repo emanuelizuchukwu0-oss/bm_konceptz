@@ -27,7 +27,7 @@
   nav .online-pill {
     margin-left: 16px; padding: 4px 10px; font-size: 12px;
     background: #1a3d2a; color: #6ee7a7; border-radius: 20px;
-    display: none; /* only shown for teachers */
+    display: none;
   }
   main { max-width: 1100px; margin: 0 auto; padding: 20px; }
   .card {
@@ -81,17 +81,42 @@
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <script>
   window.appSocket = io();
+
   window.appSocket.on('connect', () => {
     console.log('[socket] connected:', window.appSocket.id);
+
+    // ---- Late-joiner replay: fetch any pending events ----
+    fetch('/api/pending-events')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+
+        // Student: attendance window still open?
+        if (data.attendance) {
+          console.log('[boot] replayed attendance', data.attendance);
+          window.dispatchEvent(new CustomEvent('attendance_pending', {
+            detail: data.attendance
+          }));
+        }
+
+        // Incoming ringing call?
+        if (data.incoming_call) {
+          console.log('[boot] replayed incoming call', data.incoming_call);
+          window.dispatchEvent(new CustomEvent('call_pending', {
+            detail: data.incoming_call
+          }));
+        }
+      })
+      .catch(err => console.error('[boot] pending-events failed', err));
   });
+
   window.appSocket.on('connect_error', (err) => {
     console.error('[socket] connect_error:', err.message);
   });
 
-  // Expose the current user's role to any page that needs it
   window.CURRENT_USER_ROLE = "{{ current_user.role }}";
 
-  // Show "N online" pill in the nav for teachers/admins
+  // ---- Online pill in nav (teachers/admins only) ----
   window.appSocket.on('online_users', (users) => {
     const pill = document.getElementById('studentOnlineCount');
     if (!pill) return;
@@ -123,6 +148,22 @@
     {% endif %}
   </nav>
 </header>
+
+{# ============================================================ #}
+{# LIVE CALL BANNER — shown to any user with a ringing call      #}
+{# ============================================================ #}
+{% if current_user.is_authenticated %}
+<div id="liveCallBanner"
+     style="display:none;background:#1a3d2a;border-bottom:1px solid #2a2a30;
+            padding:12px 20px;text-align:center;">
+  <strong style="color:#6ee7a7;">📞 Teacher is calling!</strong>
+  <a id="liveCallJoinBtn" class="btn"
+     href="{{ url_for('chat_home') }}"
+     style="margin-left:12px;padding:6px 14px;font-size:13px;">
+    🎧 Join Call
+  </a>
+</div>
+{% endif %}
 
 <main>
   {% with messages = get_flashed_messages(with_categories=true) %}
@@ -167,8 +208,8 @@ document.addEventListener('DOMContentLoaded', function () {
   const markBtn = document.getElementById('attMarkBtn');
   const msgEl   = document.getElementById('attMsg');
 
-  socket.on('attendance_requested', (data) => {
-    console.log('[attendance] requested', data);
+  function showOverlay(data) {
+    console.log('[attendance] showing overlay', data);
     currentSessionId = Number(data.session_id);
     info.innerHTML = `<strong>Week ${data.week_number} — ${data.title}</strong><br>${data.date}`;
     msgEl.style.display = 'none';
@@ -176,6 +217,19 @@ document.addEventListener('DOMContentLoaded', function () {
     markBtn.disabled = false;
     markBtn.textContent = "✅ I'm Here";
     overlay.style.display = 'flex';
+  }
+
+  // Live path — teacher just tapped "Take Attendance"
+  socket.on('attendance_requested', (data) => showOverlay(data));
+
+  // Replay path — student just logged in, window is still open
+  window.addEventListener('attendance_pending', (e) => showOverlay(e.detail));
+
+  // Also listen for the closed event so we can hide the overlay
+  socket.on('attendance_closed', () => {
+    if (overlay.style.display === 'flex') {
+      overlay.style.display = 'none';
+    }
   });
 
   markBtn.addEventListener('click', async () => {
@@ -233,6 +287,43 @@ document.addEventListener('DOMContentLoaded', function () {
     setTimeout(() => { overlay.style.display = 'none'; }, 1800);
   });
 });
+</script>
+{% endif %}
+
+{# ============================================================ #}
+{# Global live-call banner controller                            #}
+{# ============================================================ #}
+{% if current_user.is_authenticated %}
+<script>
+(function () {
+  const banner = document.getElementById('liveCallBanner');
+  const btn    = document.getElementById('liveCallJoinBtn');
+  if (!banner || !btn) return;
+
+  function showBanner(callInfo) {
+    banner.style.display = 'block';
+    banner.dataset.callId = callInfo.call_id;
+    banner.dataset.fromId = callInfo.from_id;
+    // Just route the student to their chat list; they'll see the
+    // incoming-call modal in the thread and can accept from there.
+    btn.href = "{{ url_for('chat_home') }}";
+  }
+
+  function hideBanner() {
+    banner.style.display = 'none';
+  }
+
+  // Replay path — a call is already ringing when the page loads
+  window.addEventListener('call_pending', (e) => showBanner(e.detail));
+
+  // Live path — a call arrives while we're on any page
+  if (window.appSocket) {
+    window.appSocket.on('incoming_call', (data) => showBanner(data));
+    window.appSocket.on('call_declined', hideBanner);
+    window.appSocket.on('call_ended', hideBanner);
+    window.appSocket.on('call_accepted', hideBanner);
+  }
+})();
 </script>
 {% endif %}
 

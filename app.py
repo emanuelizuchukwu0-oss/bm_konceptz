@@ -38,6 +38,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 # ------------------------------------------------------------------
 online_users = {}                   # user_id -> socket sid
 active_attendance_sessions = set()  # session_ids currently open for check-in
+active_calls = {}                   # caller_id -> {callee_id, call_id, from_name}
 
 
 def allowed_file(filename):
@@ -45,16 +46,45 @@ def allowed_file(filename):
 
 
 # ------------------------------------------------------------------
-# REAL-TIME NOTIFIERS  (added)
+# REAL-TIME NOTIFIERS
 # ------------------------------------------------------------------
 def notify_student_dashboard(user_id):
-    """Tell a student's browser to refetch their dashboard stats."""
     socketio.emit('dashboard_refresh', {}, room=f'user_{user_id}')
 
 
 def notify_teacher_dashboard():
-    """Tell all teacher dashboards to refetch."""
     socketio.emit('dashboard_refresh', {}, room='teachers')
+
+
+# ------------------------------------------------------------------
+# PENDING-EVENT HELPERS  (for late joiners)
+# ------------------------------------------------------------------
+def _get_open_attendance_payload():
+    """Return the currently-open attendance window, or None."""
+    if not active_attendance_sessions:
+        return None
+    sid = next(iter(active_attendance_sessions))
+    sess = db.session.get(TrainingSession, sid)
+    if not sess:
+        return None
+    return {
+        'session_id': sess.session_id,
+        'week_number': sess.week_number,
+        'title': sess.title,
+        'date': sess.date.strftime('%b %d, %Y') if sess.date else '',
+    }
+
+
+def _get_incoming_call_for(user_id):
+    """Return the ringing call addressed to this user, or None."""
+    for caller_id, info in list(active_calls.items()):
+        if info['callee_id'] == user_id:
+            return {
+                'call_id': info['call_id'],
+                'from_id': caller_id,
+                'from_name': info['from_name'],
+            }
+    return None
 
 
 # ------------------------------------------------------------------
@@ -67,10 +97,9 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     role = db.Column(db.String(20), default='student')
     account_status = db.Column(db.String(20), default='Active')
-    display_name = db.Column(db.String(60))            # ← NEW
+    display_name = db.Column(db.String(60))
     last_login = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
 
     profile = db.relationship('StudentProfile', backref='user', uselist=False)
 
@@ -216,12 +245,13 @@ class Message(db.Model):
     conversation_id = db.Column(db.Integer, db.ForeignKey('conversations.conversation_id'))
     sender_id       = db.Column(db.Integer, db.ForeignKey('users.user_id'))
     body            = db.Column(db.Text)
-    media_url       = db.Column(db.String(500))       # NEW
-    media_type      = db.Column(db.String(20))        # NEW: 'image' | 'video' | None
+    media_url       = db.Column(db.String(500))
+    media_type      = db.Column(db.String(20))
     sent_at         = db.Column(db.DateTime, default=datetime.utcnow)
     read_at         = db.Column(db.DateTime)
 
     sender = db.relationship('User', foreign_keys=[sender_id])
+
 
 class CallLog(db.Model):
     __tablename__ = 'call_logs'
@@ -301,7 +331,6 @@ def compute_student_stats(user):
     profile = user.profile
     course = db.session.get(Course, profile.course_id) if profile and profile.course_id else None
 
-    # ---- Attendance ----
     total_sessions_scheduled = 0
     sessions_held = 0
     present = 0
@@ -325,14 +354,12 @@ def compute_student_stats(user):
 
         attendance_pct = int((present / sessions_held) * 100) if sessions_held else 100
 
-    # ---- Assignments ----
     total_assignments = int(get_setting('assignments_total', 6))
     submissions = Submission.query.filter_by(student_id=user.user_id).all()
     submitted_ids = {s.assignment_id for s in submissions}
     scored = [s.final_score for s in submissions if s.final_score is not None]
     avg_score = int(sum(scored) / len(scored)) if scored else 0
 
-    # ---- Progress ----
     attendance_component = (
         (present / total_sessions_scheduled) * 100
         if total_sessions_scheduled else 0
@@ -549,7 +576,32 @@ def api_my_attendance():
 
 
 # ------------------------------------------------------------------
-# NEW: TEACHER STATS API  (added for live refresh)
+# PENDING EVENTS API  (for late joiners)
+# ------------------------------------------------------------------
+@app.route('/api/pending-events')
+@login_required
+def api_pending_events():
+    """
+    Returns events a client should replay on page load:
+      - attendance: currently-open attendance window (students only)
+      - incoming_call: a ringing call addressed to this user
+    """
+    result = {'attendance': None, 'incoming_call': None}
+
+    if current_user.role == 'student':
+        payload = _get_open_attendance_payload()
+        if payload:
+            result['attendance'] = payload
+
+    call = _get_incoming_call_for(current_user.user_id)
+    if call:
+        result['incoming_call'] = call
+
+    return jsonify(result)
+
+
+# ------------------------------------------------------------------
+# TEACHER STATS API
 # ------------------------------------------------------------------
 @app.route('/api/teacher-stats')
 @login_required
@@ -651,7 +703,6 @@ def submit_assignment(assignment_id):
         db.session.add(sub)
     db.session.commit()
 
-    # NEW: real-time notifications
     notify_teacher_dashboard()
     notify_student_dashboard(current_user.user_id)
 
@@ -689,7 +740,9 @@ def self_mark_attendance():
 
     socketio.emit('attendance_marked', {
         'student_id': current_user.user_id,
-        'student_name': current_user.profile.full_name if current_user.profile else current_user.email,
+        'student_name': current_user.display_name or (
+            current_user.profile.full_name if current_user.profile else current_user.email
+        ),
         'student_email': current_user.email,
         'session_id': session_id,
         'status': 'Present',
@@ -701,7 +754,6 @@ def self_mark_attendance():
         'status': 'Present',
     }, room=f'user_{current_user.user_id}')
 
-    # NEW: real-time notifications
     notify_teacher_dashboard()
     notify_student_dashboard(current_user.user_id)
 
@@ -832,7 +884,6 @@ def take_attendance(session_id):
                 ))
         db.session.commit()
 
-        # Lock check — capture who flips to Locked so we can notify in real time
         newly_locked = []
         for student in students:
             before = student.account_status
@@ -840,7 +891,6 @@ def take_attendance(session_id):
             if student.account_status == 'Locked' and before == 'Active':
                 newly_locked.append(student)
 
-        # NEW: broadcast lock events + dashboard refresh
         for s in newly_locked:
             socketio.emit('student_locked', {
                 'user_id': s.user_id,
@@ -889,7 +939,6 @@ def reactivate_student(student_id):
     ))
     db.session.commit()
 
-    # NEW: notify both sides
     notify_teacher_dashboard()
     notify_student_dashboard(student_id)
 
@@ -915,7 +964,6 @@ def review_submission(submission_id):
         sub.submission_status = 'Reviewed'
         db.session.commit()
 
-        # NEW: notify both sides
         notify_teacher_dashboard()
         notify_student_dashboard(sub.student_id)
 
@@ -944,6 +992,7 @@ def admin_dashboard():
         late_penalty=get_setting('late_penalty', '10%'),
         attendance_days_per_week=get_setting('attendance_days_per_week', 2),
         course_weeks=get_setting('course_weeks', 6),
+        assignments_total=get_setting('assignments_total', 6),
     )
 
 
@@ -956,6 +1005,8 @@ def update_settings():
     set_setting('attendance_days_per_week',
                 request.form.get('attendance_days_per_week', 2))
     set_setting('course_weeks', request.form.get('course_weeks', 6))
+    set_setting('assignments_total',
+                request.form.get('assignments_total', 6))
     flash('Settings updated.', 'success')
     return redirect(url_for('admin_dashboard'))
 
@@ -1060,7 +1111,9 @@ def send_message(conversation_id):
         'conversation_id': conversation_id,
         'message_id': msg.message_id,
         'sender_id': msg.sender_id,
-        'sender_name': current_user.display_name or (current_user.profile.full_name if current_user.profile else current_user.email),
+        'sender_name': current_user.display_name or (
+            current_user.profile.full_name if current_user.profile else current_user.email
+        ),
         'sender_role': current_user.role,
         'body': msg.body,
         'media_url': msg.media_url,
@@ -1068,7 +1121,6 @@ def send_message(conversation_id):
         'sent_at': msg.sent_at.strftime('%H:%M'),
     }
 
-    # Send to the other party AND back to the sender (so both sides render the same)
     socketio.emit('new_message', payload, room=f'user_{other}')
     socketio.emit('new_message', payload, room=f'user_{current_user.user_id}')
 
@@ -1079,7 +1131,6 @@ def send_message(conversation_id):
 # SOCKETIO
 # ------------------------------------------------------------------
 def _online_payload():
-    """Build a list of {user_id, name, role} for all online users."""
     payload = []
     for uid in list(online_users.keys()):
         u = db.session.get(User, uid)
@@ -1087,7 +1138,7 @@ def _online_payload():
             continue
         payload.append({
             'user_id': u.user_id,
-            'name': u.profile.full_name if u.profile else u.email,
+            'name': u.display_name or (u.profile.full_name if u.profile else u.email),
             'role': u.role,
         })
     return payload
@@ -1104,7 +1155,6 @@ def on_connect():
         elif current_user.role in ('teacher', 'admin'):
             join_room('teachers')
 
-        # Broadcast rich payload (names + roles) to everyone
         socketio.emit('online_users', _online_payload(), broadcast=True)
 
 
@@ -1117,7 +1167,6 @@ def on_disconnect():
 
 @socketio.on('request_online_users')
 def handle_request_online_users():
-    """Client-side JS asks for the current list on page load."""
     if current_user.is_authenticated:
         emit('online_users', _online_payload())
 
@@ -1145,20 +1194,20 @@ def handle_start_attendance(data):
 
     active_attendance_sessions.add(sess.session_id)
 
-    emit('attendance_started', {
-        'session_id': sess.session_id,
-        'week_number': sess.week_number,
-        'title': sess.title,
-        'date': sess.date.strftime('%b %d, %Y') if sess.date else '',
-    })
+    teacher_name = current_user.display_name or (
+        current_user.profile.full_name if current_user.profile else current_user.email
+    )
 
-    socketio.emit('attendance_requested', {
+    payload = {
         'session_id': sess.session_id,
         'week_number': sess.week_number,
         'title': sess.title,
         'date': sess.date.strftime('%b %d, %Y') if sess.date else '',
-        'teacher_name': current_user.profile.full_name if current_user.profile else current_user.email,
-    }, room='students')
+        'teacher_name': teacher_name,
+    }
+
+    emit('attendance_started', payload)
+    socketio.emit('attendance_requested', payload, room='students')
 
 
 @socketio.on('end_attendance')
@@ -1185,7 +1234,17 @@ def handle_call(data):
     db.session.add(log)
     db.session.commit()
 
-    caller_name = current_user.profile.full_name if current_user.profile else current_user.email
+    caller_name = current_user.display_name or (
+        current_user.profile.full_name if current_user.profile else current_user.email
+    )
+
+    # Track ringing call so late joiners can find it
+    active_calls[current_user.user_id] = {
+        'callee_id': callee_id,
+        'call_id': log.call_id,
+        'from_name': caller_name,
+    }
+
     emit('incoming_call', {
         'call_id': log.call_id,
         'from_id': current_user.user_id,
@@ -1207,6 +1266,7 @@ def handle_decline(data):
         log.status = 'declined'
         log.ended_at = datetime.utcnow()
         db.session.commit()
+    active_calls.pop(caller_id, None)
     emit('call_declined', {'by_id': current_user.user_id}, room=f'user_{caller_id}')
 
 
@@ -1220,6 +1280,10 @@ def handle_end(data):
         if log.started_at:
             log.duration = int((log.ended_at - log.started_at).total_seconds())
         db.session.commit()
+
+    active_calls.pop(current_user.user_id, None)
+    active_calls.pop(other_id, None)
+
     emit('call_ended', {'by_id': current_user.user_id}, room=f'user_{other_id}')
 
 
@@ -1248,11 +1312,11 @@ def seed():
     if User.query.first():
         return
 
-    admin = User(email='admin@bmk.com', role='admin')
+    admin = User(email='admin@bmk.com', role='admin', display_name='Admin')
     admin.set_password('admin123')
     db.session.add(admin)
 
-    teacher = User(email='teacher@bmk.com', role='teacher')
+    teacher = User(email='teacher@bmk.com', role='teacher', display_name='Mr. Konceptz')
     teacher.set_password('teacher123')
     db.session.add(teacher)
     db.session.flush()
@@ -1318,7 +1382,7 @@ def seed():
     for name, email in [('John Doe', 'john@bmk.com'),
                         ('Mary Jane', 'mary@bmk.com'),
                         ('Peter Obi', 'peter@bmk.com')]:
-        u = User(email=email, role='student')
+        u = User(email=email, role='student', display_name=name.split()[0])
         u.set_password('student123')
         db.session.add(u)
         db.session.flush()
