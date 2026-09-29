@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 import os
 from datetime import datetime, timedelta, date as _dt_date
 from functools import wraps
@@ -16,13 +19,34 @@ from werkzeug.utils import secure_filename
 # CONFIG
 # ------------------------------------------------------------------
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'static', 'uploads')
+
+# Upload folder — use Render's persistent disk if present
+RENDER_DISK = '/var/data'
+if os.path.isdir(RENDER_DISK):
+    UPLOAD_FOLDER = os.path.join(RENDER_DISK, 'uploads')
+else:
+    UPLOAD_FOLDER = os.path.join(BASE_DIR, 'static', 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'pdf', 'mp4', 'mov'}
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'change-this-in-production-please'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(BASE_DIR, 'academy.db')
+
+# Secret key — env var wins, local dev fallback
+app.config['SECRET_KEY'] = os.environ.get(
+    'SECRET_KEY',
+    'change-this-in-production-please'
+)
+
+# Database — Postgres via DATABASE_URL on Render, SQLite locally
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
+if DATABASE_URL.startswith('postgres://'):
+    # SQLAlchemy 2.x requires 'postgresql://'
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+if not DATABASE_URL:
+    DATABASE_URL = 'sqlite:///' + os.path.join(BASE_DIR, 'academy.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
@@ -1437,11 +1461,16 @@ def seed():
 
 
 # ------------------------------------------------------------------
-# RUN
+# BOOTSTRAP — runs under gunicorn AND `python app.py`
+# ------------------------------------------------------------------
+with app.app_context():
+    db.create_all()
+    seed()
+
+
+# ------------------------------------------------------------------
+# RUN  (only when started directly, not under gunicorn)
 # ------------------------------------------------------------------
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-        seed()
     socketio.run(app, debug=True, use_reloader=False,
                  host='0.0.0.0', port=5000)
