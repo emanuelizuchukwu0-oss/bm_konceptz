@@ -1158,27 +1158,24 @@ def send_message(conversation_id):
 
 @app.route('/healthz')
 def healthz():
-    from sqlalchemy import inspect
+    from sqlalchemy import inspect, text
     import traceback
 
-    # 1) What DB is in use?
     uri = app.config['SQLALCHEMY_DATABASE_URI']
     scheme = uri.split('://')[0] if '://' in uri else 'unknown'
 
-    # 2) Can we talk to it?
     db_ok = False
     db_err = None
     tables = []
     try:
         with app.app_context():
-            db.session.execute(db.text('SELECT 1'))
+            db.session.execute(text('SELECT 1'))
             insp = inspect(db.engine)
             tables = insp.get_table_names()
         db_ok = True
     except Exception as e:
         db_err = ''.join(traceback.format_exception_only(type(e), e)).strip()
 
-    # 3) Is SECRET_KEY set?
     secret_set = app.config['SECRET_KEY'] != 'change-this-in-production-please'
 
     return jsonify({
@@ -1366,6 +1363,8 @@ def webrtc_answer(data):
 def webrtc_ice(data):
     emit('webrtc_ice', {'from_id': current_user.user_id, 'candidate': data['candidate']},
          room=f"user_{data['to_id']}")
+
+    
 
 
 # ------------------------------------------------------------------
