@@ -38,15 +38,21 @@ app.config['SECRET_KEY'] = os.environ.get(
     'change-this-in-production-please'
 )
 
-# Database — Postgres via DATABASE_URL on Render, SQLite locally
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
-if DATABASE_URL.startswith('postgres://'):
-    # SQLAlchemy 2.x requires 'postgresql://'
-    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
-if not DATABASE_URL:
-    DATABASE_URL = 'sqlite:///' + os.path.join(BASE_DIR, 'academy.db')
-app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+if DATABASE_URL:
+    # Normalize Render's 'postgres://' to 'postgresql://'
+    if DATABASE_URL.startswith('postgres://'):
+        DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
 
+    # Force the psycopg2 driver (avoids SQLAlchemy guessing wrong)
+    if DATABASE_URL.startswith('postgresql://'):
+        DATABASE_URL = DATABASE_URL.replace(
+            'postgresql://', 'postgresql+psycopg2://', 1
+        )
+else:
+    DATABASE_URL = 'sqlite:///' + os.path.join(BASE_DIR, 'academy.db')
+
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
