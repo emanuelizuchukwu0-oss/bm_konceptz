@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h2 style="margin-bottom:16px;">
+  Welcome, {{ profile.full_name if profile else current_user.email }} 👋🏽
+</h2>
+
+<div class="grid">
+
+  <!-- Course Progress -->
+  <div class="card">
+    <div class="stat-label">Course Progress</div>
+    <div class="stat" id="progressValue">{{ (progress or 0) | int }}%</div>
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressFill"
+           style="width:{{ (progress or 0) | int }}%;"></div>
+    </div>
+  </div>
+
+  <!-- Attendance -->
+  <div class="card">
+    <div class="stat-label">Attendance</div>
+    <div class="stat" id="attendancePct">{{ attendance_pct }}%</div>
+    <div id="attendanceDetail" style="font-size:12px;color:#888;">
+      Present: {{ present }} / {{ total_sessions }}
+    </div>
+  </div>
+
+  <!-- Average Score -->
+  <div class="card">
+    <div class="stat-label">Average Score</div>
+    <div class="stat" id="avgScore">{{ avg_score }}%</div>
+  </div>
+
+  <!-- Status -->
+  <div class="card">
+    <div class="stat-label">Status</div>
+    <div class="stat" style="font-size:20px;" id="statusBadge">
+      {% if current_user.account_status == 'Locked' %}
+        <span class="badge badge-locked">LOCKED</span>
+      {% else %}
+        <span class="badge badge-active">ACTIVE</span>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+
+<div class="card">
+  <h2>📚 Course</h2>
+  <p>{{ course.course_name if course else 'No course assigned yet' }}</p>
+</div>
+
+<div class="card">
+  <h2>📝 Assignments</h2>
+  {% if assignments %}
+    <table>
+      <tr>
+        <th>Title</th><th>Deadline</th><th>Status</th><th>Score</th><th></th>
+      </tr>
+      {% for a in assignments %}
+        {% set sub = submissions.get(a.assignment_id) %}
+        <tr>
+          <td>{{ a.title }}</td>
+          <td>{{ a.deadline.strftime('%b %d, %Y') if a.deadline else '—' }}</td>
+          <td>
+            {% if not sub %}
+              <span class="badge badge-pending">Not Submitted</span>
+            {% elif sub.submission_status == 'Reviewed' %}
+              <span class="badge badge-active">Reviewed</span>
+            {% elif sub.submission_status == 'Late' %}
+              <span class="badge badge-locked">Late</span>
+            {% else %}
+              <span class="badge badge-pending">Submitted</span>
+            {% endif %}
+          </td>
+          <td>{{ sub.final_score if sub and sub.final_score else '—' }}</td>
+          <td>
+            {% if not sub or sub.submission_status != 'Reviewed' %}
+              <form method="POST"
+                    action="{{ url_for('submit_assignment', assignment_id=a.assignment_id) }}"
+                    enctype="multipart/form-data"
+                    style="display:flex;gap:6px;">
+                <input type="file" name="file"
+                       style="padding:4px;font-size:12px;">
+                <input type="text" name="comment" placeholder="Comment"
+                       style="padding:4px;font-size:12px;">
+                <button class="btn" type="submit"
+                        style="padding:6px 10px;font-size:12px;">Submit</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% if sub and sub.teacher_feedback %}
+          <tr>
+            <td colspan="5" style="font-size:13px;color:#b8b8c0;">
+              💬 <strong>Feedback:</strong> {{ sub.teacher_feedback }}
+            </td>
+          </tr>
+        {% endif %}
+      {% endfor %}
+    </table>
+  {% else %}
+    <p style="color:#888;">No assignments yet.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>📖 Lessons</h2>
+  {% for l in lessons %}
+    <div style="padding:10px 0;border-bottom:1px solid #2a2a30;">
+      <strong>Week {{ l.week_number }} — {{ l.title }}</strong>
+      <p style="font-size:13px;color:#b8b8c0;margin-top:4px;">{{ l.notes }}</p>
+    </div>
+  {% else %}
+    <p style="color:#888;">No lessons yet.</p>
+  {% endfor %}
+</div>
+
+<!-- ============ Live updates ============ -->
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const socket = window.appSocket;
+  if (!socket) {
+    console.error('[dash] window.appSocket not available');
+    return;
+  }
+
+  // Shared refresh function — fetches stats and updates the DOM
+  async function refreshStudentStats() {
+    try {
+      const res = await fetch('/api/my-attendance');
+      if (!res.ok) return;
+      const s = await res.json();
+
+      document.getElementById('attendancePct').textContent = s.attendance_pct + '%';
+      document.getElementById('attendanceDetail').textContent =
+        `Present: ${s.present} / ${s.total_sessions}`;
+      document.getElementById('progressValue').textContent = s.progress + '%';
+      document.getElementById('progressFill').style.width = s.progress + '%';
+      document.getElementById('avgScore').textContent = (s.avg_score || 0) + '%';
+
+      console.log('[dash] refreshed', s);
+    } catch (err) {
+      console.error('[dash] refresh failed', err);
+    }
+  }
+
+  // 1) Explicit nudge when the student marks themselves present
+  socket.on('attendance_confirmed', refreshStudentStats);
+
+  // 2) Generic refresh — fired by the server after reviews, locks, etc.
+  socket.on('dashboard_refresh', refreshStudentStats);
+
+  // 3) If the teacher locks this account, reload to show the LOCKED state
+  socket.on('account_locked', () => {
+    console.warn('[dash] account locked by server');
+    alert('Your account has been locked. Please contact your teacher.');
+    window.location.reload();
+  });
+});
+</script>
+
+{% endblock %}

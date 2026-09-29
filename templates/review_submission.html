@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Review: {{ sub.assignment.title }}</h2>
+  <p style="color:#888;font-size:13px;">Student: {{ sub.student.profile.full_name if sub.student.profile else sub.student.email }}</p>
+  <p style="color:#888;font-size:13px;">Submitted: {{ sub.submitted_at.strftime('%b %d, %Y %H:%M') }}</p>
+
+  {% if sub.file_location %}
+    <p style="margin:14px 0;">
+      <a class="btn btn-secondary" href="{{ url_for('uploaded_file', filename=sub.file_location) }}" target="_blank">
+        📷 View Submission
+      </a>
+    </p>
+  {% endif %}
+
+  {% if sub.student_comment %}
+    <p style="font-size:13px;color:#b8b8c0;"><strong>Student note:</strong> {{ sub.student_comment }}</p>
+  {% endif %}
+
+  <div style="margin:16px 0;padding:14px;background:#0f0f12;border-radius:8px;">
+    <div class="stat-label">Automatic Score</div>
+    <div class="stat">{{ sub.automatic_score or '—' }}/100</div>
+  </div>
+
+  <form method="POST">
+    <label>Teacher Score (0–100)</label>
+    <input type="number" name="teacher_score" min="0" max="100"
+           value="{{ sub.teacher_score or sub.automatic_score or '' }}" required>
+    <label>Feedback</label>
+    <textarea name="feedback" rows="5">{{ sub.teacher_feedback or '' }}</textarea>
+    <button class="btn" type="submit">💾 Save Final Score</button>
+  </form>
+</div>
+{% endblock %}

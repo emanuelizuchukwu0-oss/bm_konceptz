@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width:420px;margin:60px auto;">
+  <h2>Pick a Display Name</h2>
+  <p style="color:#b8b8c0;font-size:13px;margin-bottom:14px;">
+    This is the name other people will see when you send messages.
+    Choose something short and recognizable.
+  </p>
+  <form method="POST">
+    <label>Display Name</label>
+    <input type="text" name="display_name" required maxlength="40"
+           placeholder="e.g. Emma Iz" autofocus>
+    <button class="btn" type="submit">Save</button>
+  </form>
+</div>
+{% endblock %}

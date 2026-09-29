@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h2 style="margin-bottom:16px;">💬 Messages</h2>
+
+{% if not convos %}
+  <div class="card">
+    <p style="color:#888;">No conversations yet.</p>
+  </div>
+{% endif %}
+
+{% for c in convos %}
+  {% set other = c.teacher if current_user.user_id == c.student_id else c.student %}
+  {% set last = c.messages[-1] if c.messages else None %}
+
+  <a href="{{ url_for('chat_thread', conversation_id=c.conversation_id) }}"
+     style="text-decoration:none;color:inherit;">
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+      <div style="flex:1;min-width:0;">
+
+        <!-- Name + role tag -->
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <strong>
+            {{ other.display_name or
+               (other.profile.full_name if other.profile else other.email) }}
+          </strong>
+          <span class="badge badge-{{ 'active' if other.role == 'teacher' else 'pending' }}"
+                style="font-size:10px;padding:2px 8px;">
+            {{ other.role|upper }}
+          </span>
+        </div>
+
+        <!-- Last message preview -->
+        <p style="font-size:13px;color:#888;margin-top:4px;
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          {% if not last %}
+            No messages yet
+          {% elif last.media_type == 'image' %}
+            {% if last.body %}
+              {{ last.body[:50] + '…' if last.body|length > 50 else last.body }} ·
+            {% endif %}
+            📷 Photo
+          {% elif last.media_type == 'video' %}
+            {% if last.body %}
+              {{ last.body[:50] + '…' if last.body|length > 50 else last.body }} ·
+            {% endif %}
+            🎥 Video
+          {% else %}
+            {{ last.body[:60] + '…' if last.body and last.body|length > 60 else last.body }}
+          {% endif %}
+        </p>
+      </div>
+
+      <!-- Timestamp -->
+      <span style="font-size:12px;color:#666;margin-left:10px;flex-shrink:0;">
+        {{ last.sent_at.strftime('%H:%M') if last else '' }}
+      </span>
+    </div>
+  </a>
+{% endfor %}
+
+{% endblock %}

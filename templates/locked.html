@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width:500px;margin:80px auto;text-align:center;">
+  <h2 style="color:#f08080;">🔒 ACCOUNT LOCKED</h2>
+  <p style="margin:16px 0;color:#b8b8c0;">
+    Your account has been temporarily locked because you have missed the maximum allowed training sessions.
+    Please contact your teacher.
+  </p>
+  <p style="font-size:13px;color:#888;">Reason: {{ current_user.profile.lock_reason or 'Attendance threshold reached' }}</p>
+  <br>
+  <a class="btn btn-secondary" href="{{ url_for('logout') }}">Logout</a>
+</div>
+{% endblock %}

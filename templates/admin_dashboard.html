@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="margin-bottom:16px;">👑 Admin Dashboard</h2>
+
+<div class="card">
+  <h2>⚙️ System Settings</h2>
+  <form method="POST" action="{{ url_for('update_settings') }}">
+    <label>Maximum Allowed Absences (before lock)</label>
+    <input type="number" name="max_absences" value="{{ max_absences }}" min="1" required>
+    <label>Late Assignment Penalty</label>
+    <input type="text" name="late_penalty" value="{{ late_penalty }}">
+    <button class="btn" type="submit">Save Settings</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Quick Info</h2>
+  <p style="color:#888;font-size:13px;">
+    This is the MVP admin panel. Extend it with teacher management, course CRUD,
+    audit logs, and database export as you grow.
+  </p>
+</div>
+{% endblock %}

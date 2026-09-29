@@ -1,0 +1,334 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h2 style="margin-bottom:16px;">👨🏽‍🏫 Teacher Dashboard</h2>
+
+<div class="grid">
+  <div class="card">
+    <div class="stat-label">Students</div>
+    <div class="stat" id="statTotal">{{ total }}</div>
+    <div style="font-size:12px;color:#888;">
+      🟢 Active: <span id="statActive">{{ active_count }}</span>
+      &nbsp;
+      🔴 Locked: <span id="statLocked">{{ locked_count }}</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stat-label">Submissions</div>
+    <div class="stat" id="statSubmissions">{{ submitted_count }}</div>
+    <div style="font-size:12px;color:#888;">
+      Awaiting: <span id="statPending">{{ pending_count }}</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stat-label" id="statAttLabel">Attendance #{{ session_index }}</div>
+    <div class="stat" style="font-size:18px;" id="statAttSession">
+      {% if current_session %}
+        Week {{ current_session.week_number }} · Day {{ current_session.day_index }}
+      {% else %}
+        No sessions yet
+      {% endif %}
+    </div>
+    <div style="font-size:12px;color:#888;margin-top:6px;">
+      ✅ <span id="statPresent">{{ present_today }}</span>
+      &nbsp;
+      ❌ <span id="statAbsent">{{ absent_today }}</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Locked Students ============ -->
+<div class="card" id="lockedCard" style="{% if not locked_students %}display:none;{% endif %}">
+  <h2>🔒 Locked Students</h2>
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Absences</th><th>Reason</th><th>Action</th></tr>
+    </thead>
+    <tbody id="lockedTableBody">
+      {% for s in locked_students %}
+      <tr>
+        <td>{{ s.profile.full_name if s.profile else s.email }}</td>
+        <td>{{ s.profile.attendance_misses if s.profile else '—' }}</td>
+        <td style="font-size:12px;color:#f08080;">
+          {{ s.profile.lock_reason if s.profile else '' }}
+        </td>
+        <td>
+          <form method="POST"
+                action="{{ url_for('reactivate_student', student_id=s.user_id) }}"
+                style="display:flex;gap:6px;">
+            <input type="text" name="reason" placeholder="Reason" required
+                   style="padding:4px;font-size:12px;margin:0;">
+            <button class="btn" style="padding:6px 10px;font-size:12px;">Reactivate</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p id="noLockedMsg" style="color:#888;{% if locked_students %}display:none;{% endif %}">
+    No locked students.
+  </p>
+</div>
+
+<!-- ============ Pending Submissions ============ -->
+<div class="card" id="pendingCard">
+  <h2>📝 Pending Submissions</h2>
+  <div id="pendingBody">
+    {% if pending_submissions %}
+    <table>
+      <tr><th>Student</th><th>Assignment</th><th>Status</th><th>Auto Score</th><th></th></tr>
+      {% for s in pending_submissions %}
+      <tr>
+        <td>{{ s.student.profile.full_name if s.student.profile else s.student.email }}</td>
+        <td>{{ s.assignment.title }}</td>
+        <td><span class="badge badge-pending">{{ s.submission_status }}</span></td>
+        <td>{{ s.automatic_score or '—' }}</td>
+        <td>
+          <a class="btn" style="padding:6px 10px;font-size:12px;"
+             href="{{ url_for('review_submission', submission_id=s.submission_id) }}">
+            Review
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+      <p style="color:#888;">Nothing pending.</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ============ Attendance control ============ -->
+<div class="card">
+  <h2>📅 Attendance</h2>
+
+  <p style="color:#888;font-size:13px;margin-bottom:14px;">
+    Tap <strong>Take Attendance</strong> to open a live check-in window.
+    Every online student will see a popup asking them to mark themselves present.
+  </p>
+
+  <button type="button" class="btn" id="takeAttendanceBtn"
+          style="width:100%;font-size:16px;padding:14px;">
+    📸 Take Attendance
+  </button>
+
+  <p id="attendanceStatus"
+     style="margin-top:12px;font-size:13px;color:#888;text-align:center;"></p>
+</div>
+
+<!-- ============ Live check-in log ============ -->
+<div class="card" id="liveCheckinsCard" style="display:none;">
+  <h2>📡 Live Check-Ins</h2>
+  <div id="liveCheckins" style="font-size:14px;color:#b8b8c0;">
+    <em style="color:#888;">Waiting for students to check in…</em>
+  </div>
+  <button type="button" class="btn btn-danger" id="stopAttendanceBtn"
+          style="margin-top:14px;width:100%;">
+    ⏹ End Attendance
+  </button>
+</div>
+
+<!-- ============ Online students ============ -->
+<div class="card">
+  <h2>🟢 Online Students</h2>
+  <div id="onlineList" style="font-size:14px;color:#b8b8c0;">
+    <em style="color:#888;">Loading…</em>
+  </div>
+</div>
+
+<!-- ============ Attendance settings ============ -->
+<div class="card">
+  <h2>⚙️ Attendance Settings</h2>
+  <form method="POST" action="{{ url_for('update_attendance_settings') }}">
+    <label>Attendance days per week (1–7)</label>
+    <input type="number" name="attendance_days_per_week"
+           min="1" max="7"
+           value="{{ attendance_days_per_week or 2 }}" required>
+
+    <label>Course length (weeks)</label>
+    <input type="number" name="course_weeks"
+           min="1" max="52"
+           value="{{ course_weeks or 6 }}" required>
+
+    <button class="btn" type="submit">Save</button>
+  </form>
+  <p style="font-size:12px;color:#888;margin-top:8px;">
+    Total sessions this course:
+    {{ (attendance_days_per_week or 2) | int * (course_weeks or 6) | int }}
+  </p>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const socket = window.appSocket;
+  if (!socket) {
+    console.error('[dashboard] window.appSocket not available — check base.html');
+    return;
+  }
+
+  // =====================================================
+  // 1) ONLINE USERS — now shows names + roles
+  // =====================================================
+  socket.on('online_users', (users) => {
+    const box = document.getElementById('onlineList');
+    if (!box) return;
+
+    if (!users || !users.length) {
+      box.innerHTML = '<em style="color:#888;">No one is online right now.</em>';
+      return;
+    }
+
+    box.innerHTML = users.map(u =>
+      `<div style="padding:6px 0;border-bottom:1px solid #2a2a30;display:flex;justify-content:space-between;">
+         <strong>${u.name}</strong>
+         <span style="color:#888;font-size:12px;">${u.role}</span>
+       </div>`
+    ).join('');
+  });
+
+  // =====================================================
+  // 2) DASHBOARD REFRESH — pull fresh stats without reload
+  // =====================================================
+  async function refreshStats() {
+    try {
+      const res = await fetch('/api/teacher-stats');
+      if (!res.ok) return;
+      const s = await res.json();
+
+      document.getElementById('statTotal').textContent = s.total;
+      document.getElementById('statActive').textContent = s.active_count;
+      document.getElementById('statLocked').textContent = s.locked_count;
+      document.getElementById('statSubmissions').textContent = s.submitted_count;
+      document.getElementById('statPending').textContent = s.pending_count;
+      document.getElementById('statPresent').textContent = s.present_today;
+      document.getElementById('statAbsent').textContent = s.absent_today;
+      document.getElementById('statAttLabel').textContent =
+        'Attendance #' + s.session_index;
+
+      const sessEl = document.getElementById('statAttSession');
+      if (s.current_session) {
+        sessEl.textContent =
+          `Week ${s.current_session.week_number} · Day ${s.current_session.day_index}`;
+      } else {
+        sessEl.textContent = 'No sessions yet';
+      }
+
+      console.log('[dashboard] stats refreshed');
+    } catch (e) {
+      console.error('[dashboard] refresh failed', e);
+    }
+  }
+
+  socket.on('dashboard_refresh', refreshStats);
+
+  // =====================================================
+  // 3) STUDENT LOCKED — insert a row live
+  // =====================================================
+  socket.on('student_locked', (data) => {
+    console.log('[dashboard] student locked:', data.full_name);
+
+    const card = document.getElementById('lockedCard');
+    const tbody = document.getElementById('lockedTableBody');
+    const noMsg = document.getElementById('noLockedMsg');
+
+    if (!card || !tbody) return;
+
+    card.style.display = 'block';
+    if (noMsg) noMsg.style.display = 'none';
+
+    // Prevent duplicate insert if the same event fires twice
+    if (tbody.querySelector(`[data-student-id="${data.user_id}"]`)) return;
+
+    const tr = document.createElement('tr');
+    tr.setAttribute('data-student-id', data.user_id);
+    tr.innerHTML = `
+      <td>${data.full_name}</td>
+      <td>—</td>
+      <td style="font-size:12px;color:#f08080;">${data.reason || ''}</td>
+      <td>
+        <form method="POST"
+              action="/teacher/reactivate/${data.user_id}"
+              style="display:flex;gap:6px;">
+          <input type="text" name="reason" placeholder="Reason" required
+                 style="padding:4px;font-size:12px;margin:0;">
+          <button class="btn" style="padding:6px 10px;font-size:12px;">Reactivate</button>
+        </form>
+      </td>`;
+    tbody.appendChild(tr);
+
+    // Also refresh the numbers so the locked count increments
+    refreshStats();
+  });
+
+  // =====================================================
+  // 4) ATTENDANCE CONTROL
+  // =====================================================
+  const takeBtn  = document.getElementById('takeAttendanceBtn');
+  const stopBtn  = document.getElementById('stopAttendanceBtn');
+  const statusEl = document.getElementById('attendanceStatus');
+  const panel    = document.getElementById('liveCheckinsCard');
+  const logBox   = document.getElementById('liveCheckins');
+
+  if (!takeBtn) return;
+
+  let activeSessionId = null;
+
+  takeBtn.addEventListener('click', () => {
+    takeBtn.disabled = true;
+    statusEl.textContent = 'Opening attendance window…';
+    if (!socket.connected) socket.connect();
+    socket.emit('start_attendance', {});
+  });
+
+  stopBtn.addEventListener('click', () => {
+    if (activeSessionId) {
+      socket.emit('end_attendance', { session_id: activeSessionId });
+    }
+    panel.style.display = 'none';
+    takeBtn.disabled = false;
+    statusEl.textContent = 'Attendance window closed.';
+    activeSessionId = null;
+  });
+
+  socket.on('attendance_started', (data) => {
+    if (data.error) {
+      statusEl.textContent = '❌ ' + data.error;
+      takeBtn.disabled = false;
+      return;
+    }
+    activeSessionId = Number(data.session_id);
+    logBox.innerHTML = '<em style="color:#888;">Waiting for students to check in…</em>';
+    panel.style.display = 'block';
+    statusEl.textContent = `Open for Week ${data.week_number} — ${data.title}`;
+  });
+
+  socket.on('attendance_marked', (data) => {
+    if (Number(data.session_id) !== activeSessionId) return;
+    if (logBox.querySelector('em')) logBox.innerHTML = '';
+
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:6px 0;border-bottom:1px solid #2a2a30;';
+    row.textContent = `✅ ${data.student_name} — ${data.status}`;
+    logBox.appendChild(row);
+
+    // Refresh top stats so ✅ count ticks up too
+    refreshStats();
+  });
+
+  socket.on('attendance_closed', () => {
+    activeSessionId = null;
+    takeBtn.disabled = false;
+    statusEl.textContent = 'Attendance window closed.';
+    panel.style.display = 'none';
+  });
+
+  socket.on('connect_error', (err) => {
+    console.error('[dashboard] socket error:', err.message);
+    statusEl.textContent = '⚠️ Connection problem. Refresh the page.';
+  });
+});
+</script>
+
+{% endblock %}

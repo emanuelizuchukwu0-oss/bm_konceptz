@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>📅 {{ session.title }} — Week {{ session.week_number }}</h2>
+  <p style="color:#888;font-size:13px;">{{ session.date }}</p>
+  <form method="POST">
+    <table>
+      <tr><th>Student</th><th>Present</th><th>Absent</th><th>Excused</th><th>Late</th></tr>
+      {% for s in students %}
+      <tr>
+        <td>{{ s.profile.full_name if s.profile else s.email }}</td>
+        {% for opt in ['Present', 'Absent', 'Excused', 'Late'] %}
+        <td>
+          <input type="radio" name="status_{{ s.user_id }}" value="{{ opt }}"
+                 {% if existing.get(s.user_id) == opt %}checked{% endif %}
+                 {% if not existing.get(s.user_id) and opt == 'Present' %}checked{% endif %}>
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </table>
+    <br>
+    <button class="btn" type="submit">Save Attendance</button>
+  </form>
+</div>
+{% endblock %}
+
+{% if records %}
+<div class="card" style="margin-bottom:16px;">
+  <h2>📋 Checked-In So Far ({{ records|length }})</h2>
+  <table>
+    <tr><th>Student</th><th>Email</th><th>Status</th><th>Recorded At</th></tr>
+    {% for r in records %}
+      {% set u = user_map.get(r.student_id) %}
+      <tr>
+        <td>{{ u.profile.full_name if u and u.profile else (u.email if u else '—') }}</td>
+        <td style="font-size:12px;color:#888;">
+          {{ u.email if u else '' }}
+        </td>
+        <td>
+          {% if r.status == 'Present' %}
+            <span class="badge badge-active">Present</span>
+          {% elif r.status == 'Absent' %}
+            <span class="badge badge-locked">Absent</span>
+          {% else %}
+            <span class="badge badge-pending">{{ r.status }}</span>
+          {% endif %}
+        </td>
+        <td style="font-size:12px;color:#888;">
+          {{ r.recorded_at.strftime('%b %d, %H:%M:%S') if r.recorded_at else '—' }}
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
