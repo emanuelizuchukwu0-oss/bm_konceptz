@@ -26,11 +26,17 @@
     {% endif %}
   </div>
 
-  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+   <div style="display:flex;gap:8px;flex-wrap:wrap;">
     {% if current_user.is_authenticated and current_user.role in ('teacher', 'admin') %}
       <button type="button" class="btn" id="callPickerBtn">
         📞 Call a Student
       </button>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ===================================================== -->
+<!-- WORKSPACE                                             -->
  
 
 <!-- ===================================================== -->
