@@ -1447,6 +1447,20 @@ def handle_end(data):
 
     emit('call_ended', {'by_id': current_user.user_id}, room=f'user_{other_id}')
 
+@socketio.on('call_left')
+def handle_leave(data):
+    """Student leaves the call without ending it. Notify the teacher."""
+    other_id = int(data.get('other_id') or 0)
+    if other_id:
+        teacher = db.session.get(User, other_id)
+        student_name = current_user.display_name or (
+            current_user.profile.full_name if current_user.profile else current_user.email
+        )
+        socketio.emit('peer_left', {
+            'user_id': current_user.user_id,
+            'name': student_name,
+        }, room=f'user_{other_id}')
+
 
 @socketio.on('webrtc_offer')
 def webrtc_offer(data):

@@ -38,7 +38,8 @@
 <!-- ===================================================== -->
 <div id="workspace" style="display:flex;gap:14px;align-items:flex-start;">
 
-  <!-- CALL PANEL -->
+  <!-- CALL PANEL — TEACHER/ADMIN VERSION -->
+  {% if current_user.role in ('teacher', 'admin') %}
   <div id="callPanel"
        style="display:none;flex:0 0 300px;position:sticky;top:80px;">
     <div class="card" style="text-align:center;">
@@ -49,11 +50,44 @@
         Talk while you chat — share photos, videos, or text
         without leaving the call.
       </div>
-      <button type="button" class="btn btn-danger" id="hangupBtn" style="width:100%;">
+
+      <button type="button" class="btn btn-secondary" id="muteBtn"
+              style="width:100%;margin-bottom:10px;">
+        🎤 Mute My Mic
+      </button>
+
+      <button type="button" class="btn btn-danger" id="hangupBtn"
+              style="width:100%;">
         ⏹ End Call
       </button>
     </div>
   </div>
+  {% endif %}
+
+  <!-- CALL PANEL — STUDENT VERSION -->
+  {% if current_user.role == 'student' %}
+  <div id="callPanel"
+       style="display:none;flex:0 0 300px;position:sticky;top:80px;">
+    <div class="card" style="text-align:center;">
+      <h2 style="margin-bottom:12px;">📞 Live Call</h2>
+      <div style="margin:14px 0;color:#f0b429;font-weight:600;" id="activeName">—</div>
+      <div id="callTimer" style="font-size:32px;font-weight:700;margin:10px 0;">00:00</div>
+      <div style="font-size:12px;color:#888;margin-bottom:16px;">
+        You can mute your mic or leave, but only the teacher can end the call.
+      </div>
+
+      <button type="button" class="btn btn-secondary" id="muteBtn"
+              style="width:100%;margin-bottom:10px;">
+        🎤 Mute My Mic
+      </button>
+
+      <button type="button" class="btn btn-secondary" id="leaveBtn"
+              style="width:100%;">
+        🚪 Leave Call
+      </button>
+    </div>
+  </div>
+  {% endif %}
 
   <!-- CHAT PANEL -->
   <div style="flex:1;min-width:0;">
@@ -316,12 +350,15 @@
     let currentCall = { peerId: null, callId: null, isCaller: false, peerName: null };
     let timerInterval = null;
     let ringingTimeout = null;
+    let isMicMuted = false;
 
     const callPanel     = document.getElementById('callPanel');
     const incomingModal = document.getElementById('incomingCall');
     const acceptBtn     = document.getElementById('acceptBtn');
     const declineBtn    = document.getElementById('declineBtn');
-    const hangupBtn     = document.getElementById('hangupBtn');
+    const hangupBtn     = document.getElementById('hangupBtn');   // teacher only
+    const leaveBtn      = document.getElementById('leaveBtn');    // student only
+    const muteBtn       = document.getElementById('muteBtn');     // both
     const remoteAudio   = document.getElementById('remoteAudio');
     const callPicker    = document.getElementById('callPicker');
     const callPickerList= document.getElementById('callPickerList');
@@ -395,7 +432,7 @@
       }
     }
 
-    function endLocalCall() {
+      function endLocalCall() {
       clearRingingTimeout();
       if (pc) { pc.close(); pc = null; }
       if (localStream) {
@@ -408,6 +445,10 @@
       hideCallPanel();
       currentCall = { peerId: null, callId: null, isCaller: false, peerName: null };
       window.__inCall = false;
+
+      // Reset mute state
+      isMicMuted = false;
+      updateMuteBtn();
     }
 
     async function initiateCall(peerId, peerName) {
@@ -509,15 +550,67 @@
     // =====================================================
     // EITHER — hang up
     // =====================================================
-    hangupBtn.addEventListener('click', () => {
-      clearRingingTimeout();
-      socket.emit('call_ended', {
-        other_id: currentCall.peerId,
-        call_id: currentCall.callId
-      });
-      endLocalCall();
-    });
+      // =====================================================
+    // MUTE / UNMUTE — available to both roles
+    // =====================================================
+    function updateMuteBtn() {
+      if (!muteBtn) return;
+      muteBtn.textContent = isMicMuted ? '🔇 Unmute My Mic' : '🎤 Mute My Mic';
+      muteBtn.style.background = isMicMuted ? '#e04a4a' : '';
+      muteBtn.style.color = isMicMuted ? '#fff' : '';
+    }
 
+    if (muteBtn) {
+      muteBtn.addEventListener('click', () => {
+        if (!localStream) return;
+        isMicMuted = !isMicMuted;
+        localStream.getAudioTracks().forEach(track => {
+          track.enabled = !isMicMuted;
+        });
+        updateMuteBtn();
+      });
+    }
+
+    // =====================================================
+    // TEACHER/ADMIN — End Call (kills the call for both sides)
+    // =====================================================
+    if (hangupBtn) {
+      hangupBtn.addEventListener('click', () => {
+        clearRingingTimeout();
+        socket.emit('call_ended', {
+          other_id: currentCall.peerId,
+          call_id: currentCall.callId
+        });
+        endLocalCall();
+      });
+    }
+
+    // =====================================================
+    // STUDENT — Leave Call (drops them out; teacher still "on call")
+    // =====================================================
+    if (leaveBtn) {
+      leaveBtn.addEventListener('click', () => {
+        // Notify teacher that we left (so they see a toast)
+        socket.emit('call_left', {
+          other_id: currentCall.peerId,
+          call_id: currentCall.callId
+        });
+        endLocalCall();
+      });
+    }
+
+        socket.on('peer_left', (data) => {
+      console.log('[call] peer left:', data.name);
+      // Best-effort: alert the teacher
+      alert(`${data.name} left the call. You can keep chatting or end the call.`);
+      // Clean up the peer connection so the call panel is still shown
+      // but the audio track stops
+      if (pc) {
+        try { pc.close(); } catch (e) {}
+        pc = null;
+      }
+      // Keep the panel visible — teacher can End Call whenever ready
+    });
     // =====================================================
     // SIGNALING
     // =====================================================
