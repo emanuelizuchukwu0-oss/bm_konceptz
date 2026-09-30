@@ -65,7 +65,7 @@
   .badge-locked { background: #3d1a1a; color: #f08080; }
   .badge-pending { background: #3d2f1a; color: #f0b429; }
   .progress-bar { height: 8px; background: #2a2a30; border-radius: 4px; overflow: hidden; margin: 8px 0; }
-  .progress-fill { height: 100%; background: #f0b429; }
+  .progress-fill { height: 100%; background: #f0b429; transition: width 0.4s ease; }
   @media (max-width: 600px) {
     nav a { margin-left: 10px; font-size: 12px; }
     main { padding: 14px; }
@@ -76,20 +76,21 @@
 
 {# ============================================================ #}
 {# GLOBAL SOCKET + PAGE HELPERS                                 #}
+{# Exactly ONE io() call per page — right here.                 #}
 {# ============================================================ #}
 {% if current_user.is_authenticated %}
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <script>
-  // =========================================================
-  // Global socket with auto-reconnect tuning
-  // =========================================================
+  // --- Socket with polling-first, auto-upgrade to WebSocket ---
   window.appSocket = io({
-    transports: ['websocket', 'polling'],
+    transports: ['polling', 'websocket'],
+    upgrade: true,
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
-    timeout: 20000
+    timeout: 20000,
+    rememberUpgrade: false
   });
 
   window.socketReady = false;
@@ -97,6 +98,7 @@
   window.__onlineUsers = [];
   window.__inCall = false;
 
+  // Run a callback once the socket is connected (or immediately)
   window.onSocketReady = function (fn) {
     if (window.socketReady) {
       try { fn(); } catch (e) { console.error(e); }
@@ -109,17 +111,17 @@
     console.log('[socket] connected:', window.appSocket.id);
     window.socketReady = true;
 
-    // Fire any queued "on ready" callbacks
+    // Run all queued callbacks
     const callbacks = window.__socketReadyCallbacks.slice();
     window.__socketReadyCallbacks.length = 0;
     callbacks.forEach(fn => {
       try { fn(); } catch (e) { console.error(e); }
     });
 
-    // Ask for online users right away
+    // Ask for online users
     window.appSocket.emit('request_online_users');
 
-    // Fetch any pending events (attendance window + ringing call)
+    // Replay any pending events
     fetch('/api/pending-events')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -168,21 +170,19 @@
     pill.style.display = 'inline-block';
   }
 
-  // Store the latest list + update the pill
+  // Cache + update pill
   window.appSocket.on('online_users', (users) => {
     window.__onlineUsers = users || [];
     updateOnlinePill(window.__onlineUsers);
   });
 
   // =========================================================
-  // Auto-refresh poller — updates page data without reloading
+  // Auto-refresh poller — 5s, skips typing and calls
   // =========================================================
   (function () {
     const REFRESH_MS = 5000;
 
-    function inCall() {
-      return window.__inCall === true;
-    }
+    function inCall() { return window.__inCall === true; }
 
     function typingOrFocused() {
       const el = document.activeElement;
@@ -196,7 +196,7 @@
       if (typingOrFocused()) return;
 
       try {
-        // --- Student dashboard numbers ---
+        // Student numbers
         if (document.getElementById('attendancePct') &&
             window.CURRENT_USER_ROLE === 'student') {
           const r = await fetch('/api/my-attendance', { cache: 'no-store' });
@@ -212,7 +212,7 @@
           }
         }
 
-        // --- Teacher dashboard numbers ---
+        // Teacher numbers
         if (document.getElementById('statTotal') &&
             (window.CURRENT_USER_ROLE === 'teacher' ||
              window.CURRENT_USER_ROLE === 'admin')) {
@@ -234,7 +234,6 @@
                 `Week ${s.current_session.week_number} · Day ${s.current_session.day_index}`;
             }
           }
-
           if (window.appSocket && window.appSocket.connected) {
             window.appSocket.emit('request_online_users');
           }
@@ -288,7 +287,7 @@
 </main>
 
 {# ============================================================ #}
-{# Student-only: attendance check-in overlay                    #}
+{# Student attendance overlay                                   #}
 {# ============================================================ #}
 {% if current_user.is_authenticated and current_user.role == 'student' %}
 <div id="attendanceOverlay" style="display:none;position:fixed;inset:0;
@@ -327,19 +326,30 @@ document.addEventListener('DOMContentLoaded', function () {
     overlay.style.display = 'flex';
   }
 
-  // Replay path — student just logged in, window is still open
+  // Replay path (already-open window on load)
   window.addEventListener('attendance_pending', (e) => showOverlay(e.detail));
 
-  // Live path — needs the socket
-  window.onSocketReady(function () {
+  // Live path — attach to the ONE shared socket
+  function attach() {
     const socket = window.appSocket;
+    if (!socket) return false;
     socket.on('attendance_requested', (data) => showOverlay(data));
     socket.on('attendance_closed', () => {
-      if (overlay.style.display === 'flex') {
-        overlay.style.display = 'none';
-      }
+      if (overlay.style.display === 'flex') overlay.style.display = 'none';
     });
-  });
+    return true;
+  }
+
+  if (!attach()) {
+    if (typeof window.onSocketReady === 'function') {
+      window.onSocketReady(attach);
+    } else {
+      let tries = 0;
+      const iv = setInterval(() => {
+        if (attach() || ++tries > 50) clearInterval(iv);
+      }, 200);
+    }
+  }
 
   markBtn.addEventListener('click', async () => {
     if (!currentSessionId) return;
@@ -400,7 +410,7 @@ document.addEventListener('DOMContentLoaded', function () {
 {% endif %}
 
 {# ============================================================ #}
-{# Global live-call banner controller                           #}
+{# Live-call banner controller                                  #}
 {# ============================================================ #}
 {% if current_user.is_authenticated %}
 <script>
@@ -416,20 +426,32 @@ document.addEventListener('DOMContentLoaded', function () {
     btn.href = "{{ url_for('chat_home') }}";
   }
 
-  function hideBanner() {
-    banner.style.display = 'none';
-  }
+  function hideBanner() { banner.style.display = 'none'; }
 
-  // Replay path — a call is already ringing when the page loads
+  // Replay path
   window.addEventListener('call_pending', (e) => showBanner(e.detail));
 
-  // Live path — needs the socket
-  window.onSocketReady(function () {
-    window.appSocket.on('incoming_call', showBanner);
-    window.appSocket.on('call_declined', hideBanner);
-    window.appSocket.on('call_ended', hideBanner);
-    window.appSocket.on('call_accepted', hideBanner);
-  });
+  // Live path — attach to the ONE shared socket
+  function attach() {
+    const socket = window.appSocket;
+    if (!socket) return false;
+    socket.on('incoming_call', showBanner);
+    socket.on('call_declined', hideBanner);
+    socket.on('call_ended', hideBanner);
+    socket.on('call_accepted', hideBanner);
+    return true;
+  }
+
+  if (!attach()) {
+    if (typeof window.onSocketReady === 'function') {
+      window.onSocketReady(attach);
+    } else {
+      let tries = 0;
+      const iv = setInterval(() => {
+        if (attach() || ++tries > 50) clearInterval(iv);
+      }, 200);
+    }
+  }
 })();
 </script>
 {% endif %}

@@ -4,7 +4,7 @@
 {% set other = convo.teacher if current_user.user_id == convo.student_id else convo.student %}
 
 <!-- ===================================================== -->
-<!-- HEADER — name + role + call button                    -->
+<!-- HEADER                                                -->
 <!-- ===================================================== -->
 <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
   <div>
@@ -30,41 +30,31 @@
 </div>
 
 <!-- ===================================================== -->
-<!-- MAIN WORKSPACE — call panel (left) + chat (right)     -->
+<!-- WORKSPACE                                             -->
 <!-- ===================================================== -->
 <div id="workspace"
      style="display:flex;gap:14px;align-items:flex-start;">
 
-  <!-- ============ CALL PANEL (hidden until a call starts) ============ -->
+  <!-- CALL PANEL -->
   <div id="callPanel"
        style="display:none;flex:0 0 300px;position:sticky;top:80px;">
     <div class="card" style="text-align:center;">
       <h2 style="margin-bottom:12px;">📞 Live Class</h2>
-
-      <div style="margin:14px 0;color:#f0b429;font-weight:600;"
-           id="activeName">—</div>
-
-      <div id="callTimer"
-           style="font-size:32px;font-weight:700;margin:10px 0;">
-        00:00
-      </div>
-
+      <div style="margin:14px 0;color:#f0b429;font-weight:600;" id="activeName">—</div>
+      <div id="callTimer" style="font-size:32px;font-weight:700;margin:10px 0;">00:00</div>
       <div style="font-size:12px;color:#888;margin-bottom:16px;">
         Talk while you chat — share photos, videos, or text
         without leaving the call.
       </div>
-
-      <button type="button" class="btn btn-danger" id="hangupBtn"
-              style="width:100%;">
+      <button type="button" class="btn btn-danger" id="hangupBtn" style="width:100%;">
         ⏹ End Call
       </button>
     </div>
   </div>
 
-  <!-- ============ CHAT PANEL (always visible) ============ -->
+  <!-- CHAT PANEL -->
   <div style="flex:1;min-width:0;">
 
-    <!-- Message list -->
     <div class="card" id="messages" style="max-height:60vh;overflow-y:auto;">
       {% for m in messages %}
         {% set sender = m.sender %}
@@ -106,31 +96,23 @@
       {% endfor %}
     </div>
 
-    <!-- Input row -->
     <form id="msgForm" enctype="multipart/form-data"
           style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <label class="btn btn-secondary"
-             style="cursor:pointer;margin:0;padding:10px 14px;">
+      <label class="btn btn-secondary" style="cursor:pointer;margin:0;padding:10px 14px;">
         📎 Attach
         <input type="file" id="fileInput" name="file"
                accept="image/*,video/*" style="display:none;">
       </label>
-
-      <input type="text" id="msgInput"
-             placeholder="Type a message…" autocomplete="off"
-             style="flex:1;min-width:180px;margin:0;">
-
+      <input type="text" id="msgInput" placeholder="Type a message…"
+             autocomplete="off" style="flex:1;min-width:180px;margin:0;">
       <button class="btn" type="submit">Send</button>
     </form>
 
-    <p id="fileName"
-       style="font-size:12px;color:#888;margin-top:6px;"></p>
+    <p id="fileName" style="font-size:12px;color:#888;margin-top:6px;"></p>
   </div>
 </div>
 
-<!-- ===================================================== -->
-<!-- INCOMING CALL MODAL (only shown to the callee)        -->
-<!-- ===================================================== -->
+<!-- INCOMING CALL MODAL -->
 <div id="incomingCall"
      style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);
             z-index:100;align-items:center;justify-content:center;">
@@ -147,9 +129,6 @@
 
 <audio id="remoteAudio" autoplay></audio>
 
-<!-- ===================================================== -->
-<!-- RESPONSIVE ADJUSTMENTS                                -->
-<!-- ===================================================== -->
 <style>
   @media (max-width: 720px) {
     #workspace { flex-direction: column; }
@@ -159,14 +138,12 @@
   }
 </style>
 
-<!-- ===================================================== -->
-<!-- SCRIPT                                                -->
-<!-- ===================================================== -->
 <script>
-document.addEventListener('DOMContentLoaded', function () {
-  const socket = window.appSocket;
-  if (!socket) return;
-
+// =====================================================
+// PHASE 1 — runs IMMEDIATELY, no socket required
+// Form submit, message rendering, file input, auto-scroll
+// =====================================================
+(function () {
   const CONVO_ID = Number({{ convo.conversation_id | tojson }});
   const MY_ID    = Number({{ current_user.user_id | tojson }});
   const MY_NAME  = {{ (current_user.display_name or current_user.email) | tojson }};
@@ -177,14 +154,14 @@ document.addEventListener('DOMContentLoaded', function () {
   const fileName  = document.getElementById('fileName');
   const messages  = document.getElementById('messages');
 
-  // ---- Attach button label ----
+  // ---- File input label ----
   fileInput.addEventListener('change', () => {
     fileName.textContent = fileInput.files.length
       ? 'Selected: ' + fileInput.files[0].name
       : '';
   });
 
-  // ---- Auto-scroll to bottom ----
+  // ---- Auto-scroll ----
   function scrollBottom() { messages.scrollTop = messages.scrollHeight; }
   setTimeout(scrollBottom, 0);
 
@@ -194,7 +171,7 @@ document.addEventListener('DOMContentLoaded', function () {
     return `<span class="badge ${cls}" style="font-size:9px;padding:2px 6px;">${role.toUpperCase()}</span>`;
   }
 
-  // ---- Render one message into the list ----
+  // ---- Render a message into the list ----
   function renderMessage(m) {
     const mine = Number(m.sender_id) === MY_ID;
     const wrap = document.createElement('div');
@@ -245,7 +222,7 @@ document.addEventListener('DOMContentLoaded', function () {
     scrollBottom();
   }
 
-  // ---- Send message ----
+  // ---- Send message (HTTP — always works) ----
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const body = input.value.trim();
@@ -275,216 +252,234 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   });
 
-  // ---- Receive message (both sender and recipient get this) ----
-  socket.on('new_message', (m) => {
-    if (Number(m.conversation_id) !== CONVO_ID) return;
-    renderMessage(m);
-  });
+  // Expose the renderer + ids so the socket phase can use them
+  window.__chat = { CONVO_ID, MY_ID, MY_NAME, renderMessage };
+})();
 
-  // =====================================================
-  // WebRTC VOICE — with in-call chat panel toggle
-  // =====================================================
-  let pc = null, localStream = null;
-  let currentCall = { peerId: null, callId: null, isCaller: false };
-  let timerInterval = null;
+// =====================================================
+// PHASE 2 — Socket listeners + WebRTC
+// Attach NOW if socket exists, otherwise wait for it.
+// =====================================================
+(function () {
+  function attach() {
+    const socket = window.appSocket;
+    if (!socket) return false;
 
-  const callBtn       = document.getElementById('callBtn');
-  const callPanel     = document.getElementById('callPanel');
-  const incomingModal = document.getElementById('incomingCall');
-  const acceptBtn     = document.getElementById('acceptBtn');
-  const declineBtn    = document.getElementById('declineBtn');
-  const hangupBtn     = document.getElementById('hangupBtn');
-  const remoteAudio   = document.getElementById('remoteAudio');
+    const { CONVO_ID, MY_ID, MY_NAME, renderMessage } = window.__chat;
 
-  const RTC_CONFIG = { iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' } ] };
+    // ---- Incoming messages ----
+    socket.on('new_message', (m) => {
+      if (Number(m.conversation_id) !== CONVO_ID) return;
+      renderMessage(m);
+    });
 
-  async function getMic() {
-    if (!localStream) {
-      localStream = await navigator.mediaDevices.getUserMedia({
-        audio: true, video: false
-      });
-    }
-    return localStream;
-  }
+    // =====================================================
+    // WebRTC
+    // =====================================================
+    let pc = null, localStream = null;
+    let currentCall = { peerId: null, callId: null, isCaller: false };
+    let timerInterval = null;
 
-  function createPeer() {
-    pc = new RTCPeerConnection(RTC_CONFIG);
-    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-    pc.ontrack = (e) => { remoteAudio.srcObject = e.streams[0]; };
-    pc.onicecandidate = (e) => {
-      if (e.candidate) socket.emit('webrtc_ice', {
-        to_id: currentCall.peerId, candidate: e.candidate
-      });
-    };
-    return pc;
-  }
+    const callBtn       = document.getElementById('callBtn');
+    const callPanel     = document.getElementById('callPanel');
+    const incomingModal = document.getElementById('incomingCall');
+    const acceptBtn     = document.getElementById('acceptBtn');
+    const declineBtn    = document.getElementById('declineBtn');
+    const hangupBtn     = document.getElementById('hangupBtn');
+    const remoteAudio   = document.getElementById('remoteAudio');
 
-  function startTimer() {
-    const start = Date.now();
-    clearInterval(timerInterval);
-    timerInterval = setInterval(() => {
-      const s = Math.floor((Date.now() - start) / 1000);
-      document.getElementById('callTimer').textContent =
-        String(Math.floor(s / 60)).padStart(2, '0') + ':' +
-        String(s % 60).padStart(2, '0');
-    }, 1000);
-  }
+    const RTC_CONFIG = { iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' } ] };
 
-  function showCallPanel(name) {
-    document.getElementById('activeName').textContent = name || 'On Call';
-    callPanel.style.display = 'block';
-    startTimer();
-  }
-
-  function hideCallPanel() {
-    callPanel.style.display = 'none';
-    document.getElementById('callTimer').textContent = '00:00';
-  }
-
-  function endLocalCall() {
-    if (pc) { pc.close(); pc = null; }
-    if (localStream) {
-      localStream.getTracks().forEach(t => t.stop());
-      localStream = null;
-    }
-    clearInterval(timerInterval);
-    timerInterval = null;
-    incomingModal.style.display = 'none';
-    hideCallPanel();
-    currentCall = { peerId: null, callId: null, isCaller: false };
-  }
-
-if (callBtn) {
-  callBtn.addEventListener('click', async () => {
-    callBtn.disabled = true;
-    try {
-      const peerId = Number(callBtn.dataset.userId);
-      await getMic();
-      currentCall = { peerId, callId: null, isCaller: true };
-      showCallPanel(callBtn.dataset.userName);
-      window.__inCall = true;
-      socket.emit('call_user', { callee_id: peerId });
-    } catch (err) {
-      console.error('[call] failed:', err);
-
-      let msg = 'Could not start call.';
-      if (err.name === 'NotAllowedError') {
-        msg = 'Microphone access was blocked. Allow it in your browser ' +
-              'and reload the page.';
-      } else if (err.name === 'NotFoundError') {
-        msg = 'No microphone found on this device.';
-      } else if (!window.appSocket || !window.appSocket.connected) {
-        msg = 'Not connected to the server. Please wait a moment and try again.';
+    async function getMic() {
+      if (!localStream) {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          audio: true, video: false
+        });
       }
-
-      alert(msg);
-      endLocalCall();
-    } finally {
-      callBtn.disabled = false;
+      return localStream;
     }
-  });
-}
 
-  // ---- Callee: accept ----
-  acceptBtn.addEventListener('click', async () => {
-    try {
-      await getMic();
+    function createPeer() {
+      pc = new RTCPeerConnection(RTC_CONFIG);
+      localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+      pc.ontrack = (e) => { remoteAudio.srcObject = e.streams[0]; };
+      pc.onicecandidate = (e) => {
+        if (e.candidate) socket.emit('webrtc_ice', {
+          to_id: currentCall.peerId, candidate: e.candidate
+        });
+      };
+      return pc;
+    }
+
+    function startTimer() {
+      const start = Date.now();
+      clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        const s = Math.floor((Date.now() - start) / 1000);
+        document.getElementById('callTimer').textContent =
+          String(Math.floor(s / 60)).padStart(2, '0') + ':' +
+          String(s % 60).padStart(2, '0');
+      }, 1000);
+    }
+
+    function showCallPanel(name) {
+      document.getElementById('activeName').textContent = name || 'On Call';
+      callPanel.style.display = 'block';
+      startTimer();
+      window.__inCall = true;
+    }
+
+    function hideCallPanel() {
+      callPanel.style.display = 'none';
+      document.getElementById('callTimer').textContent = '00:00';
+    }
+
+    function endLocalCall() {
+      if (pc) { pc.close(); pc = null; }
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+      }
+      clearInterval(timerInterval);
+      timerInterval = null;
       incomingModal.style.display = 'none';
-      showCallPanel(
-        document.getElementById('callerName').textContent
-      );
-      socket.emit('call_accepted', { caller_id: currentCall.peerId });
-    } catch {
-      alert('Mic denied.');
+      hideCallPanel();
+      currentCall = { peerId: null, callId: null, isCaller: false };
+      window.__inCall = false;
+    }
+
+    // ---- Caller ----
+    if (callBtn) {
+      callBtn.addEventListener('click', async () => {
+        callBtn.disabled = true;
+        try {
+          const peerId = Number(callBtn.dataset.userId);
+          await getMic();
+          currentCall = { peerId, callId: null, isCaller: true };
+          showCallPanel(callBtn.dataset.userName);
+          socket.emit('call_user', { callee_id: peerId });
+        } catch (err) {
+          console.error('[call] failed:', err);
+          let msg = 'Could not start call.';
+          if (err.name === 'NotAllowedError') {
+            msg = 'Microphone access was blocked. Allow it and reload.';
+          } else if (err.name === 'NotFoundError') {
+            msg = 'No microphone found on this device.';
+          } else if (!socket.connected) {
+            msg = 'Not connected to the server. Please try again.';
+          }
+          alert(msg);
+          endLocalCall();
+        } finally {
+          callBtn.disabled = false;
+        }
+      });
+    }
+
+    // ---- Callee: accept ----
+    acceptBtn.addEventListener('click', async () => {
+      try {
+        await getMic();
+        incomingModal.style.display = 'none';
+        showCallPanel(document.getElementById('callerName').textContent);
+        socket.emit('call_accepted', { caller_id: currentCall.peerId });
+      } catch {
+        alert('Mic denied.');
+        endLocalCall();
+      }
+    });
+
+    // ---- Callee: decline ----
+    declineBtn.addEventListener('click', () => {
+      socket.emit('call_declined', {
+        caller_id: currentCall.peerId,
+        call_id: currentCall.callId
+      });
       endLocalCall();
-    }
-  });
-
-  // ---- Callee: decline ----
-  declineBtn.addEventListener('click', () => {
-    socket.emit('call_declined', {
-      caller_id: currentCall.peerId,
-      call_id: currentCall.callId
     });
-    endLocalCall();
-  });
 
-  // ---- Either side: hang up ----
-  hangupBtn.addEventListener('click', () => {
-    socket.emit('call_ended', {
-      other_id: currentCall.peerId,
-      call_id: currentCall.callId
+    // ---- Either: hang up ----
+    hangupBtn.addEventListener('click', () => {
+      socket.emit('call_ended', {
+        other_id: currentCall.peerId,
+        call_id: currentCall.callId
+      });
+      endLocalCall();
     });
-    endLocalCall();
-  });
 
-  // ---- Signaling ----
-function showIncomingModal(data) {
-  currentCall = {
-    peerId: Number(data.from_id),
-    callId: Number(data.call_id),
-    isCaller: false
-  };
-  document.getElementById('callerName').textContent = data.from_name;
-  incomingModal.style.display = 'flex';
-}
-
-// Live path — call arrives while we're on the page
-socket.on('incoming_call', (data) => showIncomingModal(data));
-
-// Replay path — we just logged in and a call is already ringing
-window.addEventListener('call_pending', (e) => showIncomingModal(e.detail));
-
-  socket.on('call_accepted', async () => {
-    createPeer();
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    socket.emit('webrtc_offer', { to_id: currentCall.peerId, sdp: offer });
-  });
-
-  socket.on('call_declined', () => { alert('Call declined.'); endLocalCall(); });
-  socket.on('call_ended', () => { endLocalCall(); });
-  socket.on('call_failed', (d) => { alert(d.reason || 'Call failed'); endLocalCall(); });
-
-  socket.on('webrtc_offer', async (data) => {
-    if (!pc) createPeer();
-    await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    socket.emit('webrtc_answer', { to_id: data.from_id, sdp: answer });
-  });
-
-  socket.on('webrtc_answer', async (data) => {
-    await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-  });
-
-  socket.on('webrtc_ice', async (data) => {
-    if (pc && data.candidate) {
-      try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
-      catch (e) { console.warn('ICE error', e); }
+    // ---- Signaling ----
+    function showIncomingModal(data) {
+      currentCall = {
+        peerId: Number(data.from_id),
+        callId: Number(data.call_id),
+        isCaller: false
+      };
+      document.getElementById('callerName').textContent = data.from_name;
+      incomingModal.style.display = 'flex';
     }
-  });
-  // Set a "user is interacting" flag that clears 3 seconds after last keystroke
-let interactionTimer = null;
-['input', 'keydown'].forEach(evt => {
-  document.addEventListener(evt, () => {
-    window.__userInteracting = true;
-    clearTimeout(interactionTimer);
-    interactionTimer = setTimeout(() => {
-      window.__userInteracting = false;
-    }, 3000);
-  }, true);
-});
 
-function typingOrFocused() {
-  if (window.__userInteracting) return true;
-  const el = document.activeElement;
-  if (!el) return false;
-  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
-}
+    socket.on('incoming_call', showIncomingModal);
+    window.addEventListener('call_pending', (e) => showIncomingModal(e.detail));
 
+    socket.on('call_accepted', async () => {
+      createPeer();
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit('webrtc_offer', { to_id: currentCall.peerId, sdp: offer });
+    });
+
+    socket.on('call_declined', () => { alert('Call declined.'); endLocalCall(); });
+    socket.on('call_ended',    () => { endLocalCall(); });
+    socket.on('call_failed', (d) => { alert(d.reason || 'Call failed'); endLocalCall(); });
+
+    socket.on('webrtc_offer', async (data) => {
+      if (!pc) createPeer();
+      await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit('webrtc_answer', { to_id: data.from_id, sdp: answer });
+    });
+
+    socket.on('webrtc_answer', async (data) => {
+      await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+    });
+
+    socket.on('webrtc_ice', async (data) => {
+      if (pc && data.candidate) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+        catch (e) { console.warn('ICE error', e); }
+      }
+    });
+
+    // ---- User-interaction flag (for auto-refresh poller) ----
+    let interactionTimer = null;
+    ['input', 'keydown'].forEach(evt => {
+      document.addEventListener(evt, () => {
+        window.__userInteracting = true;
+        clearTimeout(interactionTimer);
+        interactionTimer = setTimeout(() => {
+          window.__userInteracting = false;
+        }, 3000);
+      }, true);
+    });
+
+    return true;
+  }
+
+  // Try immediately; if not ready, use onSocketReady; if that's missing, poll
+  if (!attach()) {
+    if (typeof window.onSocketReady === 'function') {
+      window.onSocketReady(attach);
+    } else {
+      let tries = 0;
+      const iv = setInterval(() => {
+        if (attach() || ++tries > 50) clearInterval(iv);
+      }, 200);
+    }
+  }
+})();
 </script>
 
 {% endblock %}
