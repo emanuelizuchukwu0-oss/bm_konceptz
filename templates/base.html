@@ -442,6 +442,13 @@ document.addEventListener('DOMContentLoaded', function () {
     return true;
   }
 
+  // Keep the socket warm with a heartbeat
+setInterval(() => {
+  if (window.appSocket && window.appSocket.connected) {
+    window.appSocket.emit('ping_server');
+  }
+}, 20000);   // every 20 seconds
+
   if (!attach()) {
     if (typeof window.onSocketReady === 'function') {
       window.onSocketReady(attach);

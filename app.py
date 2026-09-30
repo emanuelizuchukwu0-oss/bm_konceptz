@@ -1461,6 +1461,10 @@ def handle_leave(data):
             'name': student_name,
         }, room=f'user_{other_id}')
 
+@socketio.on('ping_server')
+def handle_ping():
+    emit('pong_server', {'ts': time.time()})
+
 
 @socketio.on('webrtc_offer')
 def webrtc_offer(data):
