@@ -31,15 +31,7 @@
       <button type="button" class="btn" id="callPickerBtn">
         📞 Call a Student
       </button>
-      <form method="POST"
-            action="{{ url_for('clear_chat', conversation_id=convo.conversation_id) }}"
-            onsubmit="return confirm('Delete ALL messages in this chat? This cannot be undone.');"
-            style="margin:0;">
-        <button class="btn btn-danger" type="submit">🗑️ Clear Chat</button>
-      </form>
-    {% endif %}
-  </div>
-</div>
+ 
 
 <!-- ===================================================== -->
 <!-- WORKSPACE                                             -->
