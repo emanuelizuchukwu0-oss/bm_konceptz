@@ -1205,7 +1205,7 @@ def _online_payload():
 
 
 @socketio.on('connect')
-def on_connect():
+def on_connect(auth=None):                     # ← accept auth arg
     if current_user.is_authenticated:
         online_users[current_user.user_id] = request.sid
         join_room(f'user_{current_user.user_id}')
@@ -1215,15 +1215,14 @@ def on_connect():
         elif current_user.role in ('teacher', 'admin'):
             join_room('teachers')
 
-        socketio.emit('online_users', _online_payload(), broadcast=True)
-
+        # Broadcast to everyone (no broadcast=True needed in v5)
+        socketio.emit('online_users', _online_payload())
 
 @socketio.on('disconnect')
 def on_disconnect():
     if current_user.is_authenticated:
         online_users.pop(current_user.user_id, None)
-        socketio.emit('online_users', _online_payload(), broadcast=True)
-
+        socketio.emit('online_users', _online_payload())     # ← no broadcast kwarg
 
 @socketio.on('request_online_users')
 def handle_request_online_users():
