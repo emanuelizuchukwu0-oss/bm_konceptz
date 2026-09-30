@@ -16,11 +16,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # CONFIG
-# ------------------------------------------------------------------
+# ==================================================================
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
+# Render persistent disk (or local uploads)
 RENDER_DISK = '/var/data'
 if os.path.isdir(RENDER_DISK):
     UPLOAD_FOLDER = os.path.join(RENDER_DISK, 'uploads')
@@ -37,6 +38,7 @@ app.config['SECRET_KEY'] = os.environ.get(
     'change-this-in-production-please'
 )
 
+# --- Database URL (Postgres on Render, SQLite locally) ---
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 if DATABASE_URL:
     if DATABASE_URL.startswith('postgres://'):
@@ -67,23 +69,25 @@ socketio = SocketIO(
     engineio_logger=False,
 )
 
-# ------------------------------------------------------------------
+
+# ==================================================================
 # IN-MEMORY STATE
-# ------------------------------------------------------------------
+# ==================================================================
 online_users = {}                   # user_id -> socket sid
 active_attendance_sessions = set()  # session_ids currently open for check-in
 active_calls = {}                   # caller_id -> {callee_id, call_id, from_name, started_at}
 
-CALL_TIMEOUT_SECONDS = 60           # FIXED: auto-expire stale ringing calls
+CALL_TIMEOUT_SECONDS = 60
+GENERAL_CONVO_NAME = "BM_Konceptz — General Chat"
 
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # REAL-TIME NOTIFIERS
-# ------------------------------------------------------------------
+# ==================================================================
 def notify_student_dashboard(user_id):
     socketio.emit('dashboard_refresh', {}, room=f'user_{user_id}')
 
@@ -92,9 +96,9 @@ def notify_teacher_dashboard():
     socketio.emit('dashboard_refresh', {}, room='teachers')
 
 
-# ------------------------------------------------------------------
-# PENDING-EVENT HELPERS  (for late joiners)
-# ------------------------------------------------------------------
+# ==================================================================
+# PENDING-EVENT HELPERS
+# ==================================================================
 def _get_open_attendance_payload():
     if not active_attendance_sessions:
         return None
@@ -111,10 +115,8 @@ def _get_open_attendance_payload():
 
 
 def _get_incoming_call_for(user_id):
-    """Return the ringing call addressed to this user, or None."""
     now = time.time()
     for caller_id, info in list(active_calls.items()):
-        # FIXED: expire stale calls so late joiners don't see phantom popups
         if now - info.get('started_at', 0) > CALL_TIMEOUT_SECONDS:
             active_calls.pop(caller_id, None)
             continue
@@ -127,9 +129,19 @@ def _get_incoming_call_for(user_id):
     return None
 
 
-# ------------------------------------------------------------------
+def get_general_conversation():
+    """Return the single shared group conversation, creating it if needed."""
+    convo = Conversation.query.filter_by(is_group=True).first()
+    if not convo:
+        convo = Conversation(name=GENERAL_CONVO_NAME, is_group=True)
+        db.session.add(convo)
+        db.session.commit()
+    return convo
+
+
+# ==================================================================
 # MODELS
-# ------------------------------------------------------------------
+# ==================================================================
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
     user_id = db.Column(db.Integer, primary_key=True)
@@ -267,8 +279,10 @@ class SystemSetting(db.Model):
 class Conversation(db.Model):
     __tablename__ = 'conversations'
     conversation_id = db.Column(db.Integer, primary_key=True)
-    student_id = db.Column(db.Integer, db.ForeignKey('users.user_id'))
-    teacher_id = db.Column(db.Integer, db.ForeignKey('users.user_id'))
+    student_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=True)
+    teacher_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=True)
+    name = db.Column(db.String(120))
+    is_group = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_message_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -304,9 +318,9 @@ class CallLog(db.Model):
     status = db.Column(db.String(20))
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # HELPERS
-# ------------------------------------------------------------------
+# ==================================================================
 @login_manager.user_loader
 def load_user(user_id):
     return db.session.get(User, int(user_id))
@@ -364,9 +378,9 @@ def check_attendance_lock(student_user):
         db.session.commit()
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # ATTENDANCE MATH
-# ------------------------------------------------------------------
+# ==================================================================
 def compute_student_stats(user):
     profile = user.profile
     course = db.session.get(Course, profile.course_id) if profile and profile.course_id else None
@@ -427,9 +441,9 @@ def compute_student_stats(user):
     }
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # AUTH ROUTES
-# ------------------------------------------------------------------
+# ==================================================================
 @app.route('/')
 def index():
     if current_user.is_authenticated:
@@ -474,7 +488,6 @@ def register():
 
         notify_teacher_dashboard()
 
-        # FIXED: auto-login so the new user can immediately send messages, join calls, etc.
         login_user(user)
         flash('Account created. Welcome!', 'success')
         return redirect(url_for('dashboard'))
@@ -548,9 +561,9 @@ def dashboard():
         return redirect(url_for('admin_dashboard'))
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # STUDENT VIEWS
-# ------------------------------------------------------------------
+# ==================================================================
 def student_dashboard():
     stats = compute_student_stats(current_user)
     course = stats['course']
@@ -619,9 +632,9 @@ def api_my_attendance():
     })
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # PENDING EVENTS API
-# ------------------------------------------------------------------
+# ==================================================================
 @app.route('/api/pending-events')
 @login_required
 def api_pending_events():
@@ -639,9 +652,9 @@ def api_pending_events():
     return jsonify(result)
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # TEACHER STATS API
-# ------------------------------------------------------------------
+# ==================================================================
 @app.route('/api/teacher-stats')
 @login_required
 @role_required('teacher', 'admin')
@@ -799,9 +812,9 @@ def self_mark_attendance():
     return jsonify({'ok': True, 'status': 'Present'})
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # TEACHER / ADMIN VIEWS
-# ------------------------------------------------------------------
+# ==================================================================
 @app.route('/teacher')
 @login_required
 @role_required('teacher', 'admin')
@@ -826,7 +839,6 @@ def teacher_dashboard():
                            .filter(TrainingSession.date >= today)
                            .order_by(TrainingSession.date.asc())
                            .first())
-
     if not current_session:
         current_session = (TrainingSession.query
                            .order_by(TrainingSession.date.desc())
@@ -841,7 +853,6 @@ def teacher_dashboard():
                          .filter(TrainingSession.course_id == current_session.course_id)
                          .filter(TrainingSession.date <= current_session.date)
                          .count())
-
         rows = Attendance.query.filter_by(session_id=current_session.session_id).all()
         present_today = sum(1 for a in rows if a.status == 'Present')
         absent_today  = sum(1 for a in rows if a.status == 'Absent')
@@ -878,7 +889,6 @@ def update_attendance_settings():
         days = max(1, min(7, int(days)))
     except (ValueError, TypeError):
         days = 2
-
     try:
         weeks = max(1, min(52, int(weeks)))
     except (ValueError, TypeError):
@@ -891,7 +901,6 @@ def update_attendance_settings():
     return redirect(url_for('teacher_dashboard'))
 
 
-# FIXED: HTTP fallback for Take Attendance, works even if socket fails
 @app.route('/teacher/start-attendance', methods=['POST'])
 @login_required
 @role_required('teacher', 'admin')
@@ -932,7 +941,6 @@ def start_attendance_http():
     return jsonify({'ok': True, **payload})
 
 
-# FIXED: HTTP fallback for End Attendance
 @app.route('/teacher/end-attendance', methods=['POST'])
 @login_required
 @role_required('teacher', 'admin')
@@ -978,6 +986,14 @@ def take_attendance(session_id):
                     recorded_by=current_user.user_id
                 ))
         db.session.commit()
+
+        # If a live window is open for this session, close it
+        if session_id in active_attendance_sessions:
+            active_attendance_sessions.discard(session_id)
+            try:
+                socketio.emit('attendance_closed', {'session_id': session_id}, room='students')
+            except Exception:
+                pass
 
         newly_locked = []
         for student in students:
@@ -1074,9 +1090,9 @@ def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # ADMIN
-# ------------------------------------------------------------------
+# ==================================================================
 @app.route('/admin')
 @login_required
 @role_required('admin')
@@ -1106,35 +1122,14 @@ def update_settings():
     return redirect(url_for('admin_dashboard'))
 
 
-# ------------------------------------------------------------------
-# CHAT
-# ------------------------------------------------------------------
+# ==================================================================
+# CHAT  (single group chat for everyone)
+# ==================================================================
 @app.route('/chat')
 @login_required
 def chat_home():
-    if current_user.role == 'student':
-        teachers = User.query.filter_by(role='teacher').all()
-        for t in teachers:
-            existing = Conversation.query.filter_by(
-                student_id=current_user.user_id, teacher_id=t.user_id
-            ).first()
-            if not existing:
-                db.session.add(Conversation(
-                    student_id=current_user.user_id, teacher_id=t.user_id
-                ))
-        db.session.commit()
-
-        convos = (Conversation.query
-                  .filter_by(student_id=current_user.user_id)
-                  .order_by(Conversation.last_message_at.desc())
-                  .all())
-    else:
-        convos = (Conversation.query
-                  .filter_by(teacher_id=current_user.user_id)
-                  .order_by(Conversation.last_message_at.desc())
-                  .all())
-
-    return render_template('chat_home.html', convos=convos)
+    convo = get_general_conversation()
+    return redirect(url_for('chat_thread', conversation_id=convo.conversation_id))
 
 
 @app.route('/chat/<int:conversation_id>')
@@ -1142,8 +1137,10 @@ def chat_home():
 def chat_thread(conversation_id):
     convo = db.session.get(Conversation, conversation_id) or abort(404)
 
-    if current_user.user_id not in (convo.student_id, convo.teacher_id):
-        abort(403)
+    # Group chats: everyone allowed. 1-to-1: participants only.
+    if not convo.is_group:
+        if current_user.user_id not in (convo.student_id, convo.teacher_id):
+            abort(403)
 
     (Message.query
         .filter_by(conversation_id=conversation_id, read_at=None)
@@ -1158,8 +1155,10 @@ def chat_thread(conversation_id):
 @login_required
 def send_message(conversation_id):
     convo = db.session.get(Conversation, conversation_id) or abort(404)
-    if current_user.user_id not in (convo.student_id, convo.teacher_id):
-        abort(403)
+
+    if not convo.is_group:
+        if current_user.user_id not in (convo.student_id, convo.teacher_id):
+            abort(403)
 
     body = request.form.get('body', '').strip()
     file = request.files.get('file')
@@ -1200,8 +1199,6 @@ def send_message(conversation_id):
     db.session.add(msg)
     db.session.commit()
 
-    other = convo.teacher_id if current_user.user_id == convo.student_id else convo.student_id
-
     payload = {
         'conversation_id': conversation_id,
         'message_id': msg.message_id,
@@ -1216,12 +1213,19 @@ def send_message(conversation_id):
         'sent_at': msg.sent_at.strftime('%H:%M'),
     }
 
-    # FIXED: emit only to the other user; sender renders optimistically on the client
-    socketio.emit('new_message', payload, room=f'user_{other}')
+    if convo.is_group:
+        # Group → everyone connected receives it
+        socketio.emit('new_message', payload)
+    else:
+        other = convo.teacher_id if current_user.user_id == convo.student_id else convo.student_id
+        socketio.emit('new_message', payload, room=f'user_{other}')
 
     return jsonify({'ok': True, 'message_id': msg.message_id, 'payload': payload})
 
 
+# ==================================================================
+# HEALTH
+# ==================================================================
 @app.route('/healthz')
 def healthz():
     from sqlalchemy import inspect, text
@@ -1253,9 +1257,9 @@ def healthz():
     })
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # SOCKETIO
-# ------------------------------------------------------------------
+# ==================================================================
 def _online_payload():
     payload = []
     for uid in list(online_users.keys()):
@@ -1281,6 +1285,13 @@ def on_connect(auth=None):
         elif current_user.role in ('teacher', 'admin'):
             join_room('teachers')
 
+        # Everyone also joins the group chat room
+        try:
+            convo = get_general_conversation()
+            join_room(f'convo_{convo.conversation_id}')
+        except Exception:
+            pass
+
         socketio.emit('online_users', _online_payload())
 
 
@@ -1290,7 +1301,7 @@ def on_disconnect():
         uid = current_user.user_id
         online_users.pop(uid, None)
 
-        # FIXED: notify the other side if this user was in a call
+        # If this user was in a call, notify the other side
         for caller_id, info in list(active_calls.items()):
             if info['callee_id'] == uid or caller_id == uid:
                 other = info['callee_id'] if caller_id == uid else caller_id
@@ -1373,7 +1384,6 @@ def handle_call(data):
         current_user.profile.full_name if current_user.profile else current_user.email
     )
 
-    # FIXED: track started_at so stale calls can be expired
     active_calls[current_user.user_id] = {
         'callee_id': callee_id,
         'call_id': log.call_id,
@@ -1391,7 +1401,6 @@ def handle_call(data):
 @socketio.on('call_accepted')
 def handle_accept(data):
     caller_id = int(data['caller_id'])
-    # FIXED: clear the ringing flag now that the call has been accepted
     info = active_calls.get(caller_id)
     if info:
         info.pop('started_at', None)
@@ -1445,9 +1454,9 @@ def webrtc_ice(data):
          room=f"user_{data['to_id']}")
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # SEED
-# ------------------------------------------------------------------
+# ==================================================================
 def seed():
     if User.query.first():
         return
@@ -1543,17 +1552,38 @@ def seed():
     print('Student: john@bmk.com / student123')
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # BOOTSTRAP
-# ------------------------------------------------------------------
+# ==================================================================
 with app.app_context():
     db.create_all()
+
+    # Lightweight migration for existing Postgres tables
+    try:
+        from sqlalchemy import text
+        db.session.execute(text(
+            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS name VARCHAR(120)"
+        ))
+        db.session.execute(text(
+            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS is_group BOOLEAN DEFAULT FALSE"
+        ))
+        db.session.execute(text(
+            "ALTER TABLE conversations ALTER COLUMN student_id DROP NOT NULL"
+        ))
+        db.session.execute(text(
+            "ALTER TABLE conversations ALTER COLUMN teacher_id DROP NOT NULL"
+        ))
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+
     seed()
+    get_general_conversation()
 
 
-# ------------------------------------------------------------------
+# ==================================================================
 # RUN
-# ------------------------------------------------------------------
+# ==================================================================
 if __name__ == '__main__':
     socketio.run(app, debug=True, use_reloader=False,
                  host='0.0.0.0', port=5000)
