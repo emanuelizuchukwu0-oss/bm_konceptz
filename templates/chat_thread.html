@@ -2,7 +2,7 @@
 {% block content %}
 
 <!-- ===================================================== -->
-<!-- HEADER — group info (works for group + 1-to-1)        -->
+<!-- HEADER                                                -->
 <!-- ===================================================== -->
 <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
   <div>
@@ -27,7 +27,7 @@
   </div>
 
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
-    {% if current_user.role in ('teacher', 'admin') %}
+    {% if current_user.is_authenticated and current_user.role in ('teacher', 'admin') %}
       <button type="button" class="btn" id="callPickerBtn">
         📞 Call a Student
       </button>
@@ -40,13 +40,14 @@
     {% endif %}
   </div>
 </div>
+
 <!-- ===================================================== -->
-<!-- WORKSPACE — call panel (left) + chat (right)          -->
+<!-- WORKSPACE                                             -->
 <!-- ===================================================== -->
 <div id="workspace" style="display:flex;gap:14px;align-items:flex-start;">
 
-  <!-- CALL PANEL — TEACHER/ADMIN VERSION -->
-  {% if current_user.role in ('teacher', 'admin') %}
+  <!-- CALL PANEL — TEACHER/ADMIN -->
+  {% if current_user.is_authenticated and current_user.role in ('teacher', 'admin') %}
   <div id="callPanel"
        style="display:none;flex:0 0 300px;position:sticky;top:80px;">
     <div class="card" style="text-align:center;">
@@ -57,22 +58,19 @@
         Talk while you chat — share photos, videos, or text
         without leaving the call.
       </div>
-
       <button type="button" class="btn btn-secondary" id="muteBtn"
               style="width:100%;margin-bottom:10px;">
         🎤 Mute My Mic
       </button>
-
-      <button type="button" class="btn btn-danger" id="hangupBtn"
-              style="width:100%;">
+      <button type="button" class="btn btn-danger" id="hangupBtn" style="width:100%;">
         ⏹ End Call
       </button>
     </div>
   </div>
   {% endif %}
 
-  <!-- CALL PANEL — STUDENT VERSION -->
-  {% if current_user.role == 'student' %}
+  <!-- CALL PANEL — STUDENT -->
+  {% if current_user.is_authenticated and current_user.role == 'student' %}
   <div id="callPanel"
        style="display:none;flex:0 0 300px;position:sticky;top:80px;">
     <div class="card" style="text-align:center;">
@@ -82,14 +80,11 @@
       <div style="font-size:12px;color:#888;margin-bottom:16px;">
         You can mute your mic or leave, but only the teacher can end the call.
       </div>
-
       <button type="button" class="btn btn-secondary" id="muteBtn"
               style="width:100%;margin-bottom:10px;">
         🎤 Mute My Mic
       </button>
-
-      <button type="button" class="btn btn-secondary" id="leaveBtn"
-              style="width:100%;">
+      <button type="button" class="btn btn-secondary" id="leaveBtn" style="width:100%;">
         🚪 Leave Call
       </button>
     </div>
@@ -100,62 +95,56 @@
   <div style="flex:1;min-width:0;">
 
     <div class="card" id="messages" style="max-height:60vh;overflow-y:auto;">
-{% for m in messages %}
-  {% set sender = m.sender %}
-  {% set is_mine = (m.sender_id == current_user.user_id) %}
-  {% set can_delete = is_mine or current_user.role in ('teacher', 'admin') %}
+      {% for m in messages %}
+        {% set sender = m.sender %}
+        {% set is_mine = (m.sender_id == current_user.user_id) %}
+        {% set can_delete = is_mine or (current_user.is_authenticated and current_user.role in ('teacher', 'admin')) %}
 
-  <div style="margin:10px 0;text-align:{{ 'right' if is_mine else 'left' }};"
-       data-message-id="{{ m.message_id }}">
+        <div style="margin:10px 0;text-align:{{ 'right' if is_mine else 'left' }};"
+             data-message-id="{{ m.message_id }}">
 
-    <div style="font-size:11px;color:#888;margin-bottom:2px;
-                display:flex;align-items:center;gap:6px;
-                {{ 'justify-content:flex-end;' if is_mine else 'justify-content:flex-start;' }}">
-      <strong>
-        {{ sender.display_name or
-           (sender.profile.full_name if sender.profile else sender.email) }}
-      </strong>
-      <span class="badge badge-{{ 'active' if sender.role == 'teacher' else 'pending' }}"
-            style="font-size:9px;padding:2px 6px;">
-        {{ sender.role|upper }}
-      </span>
-      {% if can_delete %}
-        <button type="button"
-                onclick="window.__deleteMessage && window.__deleteMessage({{ m.message_id }}, this.closest('[data-message-id]'))"
-                title="Delete message"
-                style="background:transparent;border:none;color:#888;font-size:16px;
-                       font-weight:700;cursor:pointer;padding:0 4px;line-height:1;">
-          ×
-        </button>
-      {% endif %}
-    </div>
+          <div style="font-size:11px;color:#888;margin-bottom:2px;
+                      display:flex;align-items:center;gap:6px;
+                      {{ 'justify-content:flex-end;' if is_mine else 'justify-content:flex-start;' }}">
+            <strong>
+              {{ sender.display_name or
+                 (sender.profile.full_name if sender.profile else sender.email) }}
+            </strong>
+            <span class="badge badge-{{ 'active' if sender.role == 'teacher' else 'pending' }}"
+                  style="font-size:9px;padding:2px 6px;">
+              {{ sender.role|upper }}
+            </span>
+            {% if can_delete %}
+              <button type="button"
+                      onclick="window.__deleteMessage && window.__deleteMessage({{ m.message_id }}, this.closest('[data-message-id]'))"
+                      title="Delete message"
+                      style="background:transparent;border:none;color:#888;font-size:16px;
+                             font-weight:700;cursor:pointer;padding:0 4px;line-height:1;">
+                ×
+              </button>
+            {% endif %}
+          </div>
 
-    <div style="display:inline-block;max-width:75%;padding:10px 14px;border-radius:12px;
-                word-break:break-word;overflow-wrap:anywhere;
-                background:{{ '#f0b429' if is_mine else '#2a2a30' }};
-                color:{{ '#0f0f12' if is_mine else '#e8e8ec' }};">
-      {% if m.body %}{{ m.body }}{% endif %}
-      {% if m.media_type == 'image' %}
-        <div style="margin-top:6px;">
-          <img src="{{ url_for('uploaded_file', filename=m.media_url) }}"
-               style="max-width:100%;border-radius:8px;display:block;cursor:zoom-in;"
-               onclick="window.__openLightbox && window.__openLightbox(this.src)"
-               alt="">
-        </div>
-      {% elif m.media_type == 'video' %}
-        <div style="margin-top:6px;">
-          <video controls style="max-width:100%;border-radius:8px;display:block;">
-            <source src="{{ url_for('uploaded_file', filename=m.media_url) }}">
-          </video>
-        </div>
-      {% endif %}
-    </div>
-
-    <div style="font-size:11px;color:#666;margin-top:4px;">
-      {{ m.sent_at.strftime('%H:%M') }}
-    </div>
-  </div>
-{% endfor %}
+          <div style="display:inline-block;max-width:75%;padding:10px 14px;border-radius:12px;
+                      word-break:break-word;overflow-wrap:anywhere;
+                      background:{{ '#f0b429' if is_mine else '#2a2a30' }};
+                      color:{{ '#0f0f12' if is_mine else '#e8e8ec' }};">
+            {% if m.body %}{{ m.body }}{% endif %}
+            {% if m.media_type == 'image' %}
+              <div style="margin-top:6px;">
+                <img src="{{ url_for('uploaded_file', filename=m.media_url) }}"
+                     style="max-width:100%;border-radius:8px;display:block;cursor:zoom-in;"
+                     onclick="window.__openLightbox && window.__openLightbox(this.src);"
+                     alt="">
+              </div>
+            {% elif m.media_type == 'video' %}
+              <div style="margin-top:6px;">
+                <video controls style="max-width:100%;border-radius:8px;display:block;">
+                  <source src="{{ url_for('uploaded_file', filename=m.media_url) }}">
+                </video>
+              </div>
+            {% endif %}
+          </div>
 
           <div style="font-size:11px;color:#666;margin-top:4px;">
             {{ m.sent_at.strftime('%H:%M') }}
@@ -181,7 +170,7 @@
 </div>
 
 <!-- ===================================================== -->
-<!-- CALL PICKER MODAL — teachers choose who to call       -->
+<!-- CALL PICKER MODAL                                     -->
 <!-- ===================================================== -->
 <div id="callPicker"
      style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);
@@ -215,7 +204,7 @@
 </div>
 
 <!-- ===================================================== -->
-<!-- LIGHTBOX — click any image to view full screen        -->
+<!-- LIGHTBOX                                              -->
 <!-- ===================================================== -->
 <div id="imgLightbox"
      style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);
@@ -233,22 +222,6 @@
     ×
   </button>
 </div>
-
-{% if m.media_type == 'image' %}
-  <div style="margin-top:6px;">
-    <img src="{{ url_for('uploaded_file', filename=m.media_url) }}"
-         style="max-width:100%;border-radius:8px;display:block;">
-  </div>
-{% elif m.media_type == 'video' %}
-
-{% if m.media_type == 'image' %}
-  <div style="margin-top:6px;">
-    <img src="{{ url_for('uploaded_file', filename=m.media_url) }}"
-         style="max-width:100%;border-radius:8px;display:block;cursor:zoom-in;"
-         onclick="window.__openLightbox && window.__openLightbox(this.src);"
-         alt="">
-  </div>
-{% elif m.media_type == 'video' %}
 
 <audio id="remoteAudio" autoplay></audio>
 
