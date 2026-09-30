@@ -73,7 +73,7 @@ socketio = SocketIO(
 # ==================================================================
 # IN-MEMORY STATE
 # ==================================================================
-online_users = {}                   # user_id -> socket sid
+online_users = {}                   # user_id -> set of sids
 active_attendance_sessions = set()  # session_ids currently open for check-in
 active_calls = {}                   # caller_id -> {callee_id, call_id, from_name, started_at}
 
@@ -377,6 +377,11 @@ def check_attendance_lock(student_user):
         profile.lock_reason = f'Attendance threshold reached ({absences} absences)'
         db.session.commit()
 
+
+def is_user_online(user_id):
+    """A user is online if they have at least one active socket."""
+    sids = online_users.get(user_id)
+    return bool(sids)
 
 # ==================================================================
 # ATTENDANCE MATH
@@ -1277,15 +1282,18 @@ def _online_payload():
 @socketio.on('connect')
 def on_connect(auth=None):
     if current_user.is_authenticated:
-        online_users[current_user.user_id] = request.sid
-        join_room(f'user_{current_user.user_id}')
+        uid = current_user.user_id
+
+        # Add THIS socket's sid to the user's set
+        online_users.setdefault(uid, set()).add(request.sid)
+
+        join_room(f'user_{uid}')
 
         if current_user.role == 'student':
             join_room('students')
         elif current_user.role in ('teacher', 'admin'):
             join_room('teachers')
 
-        # Everyone also joins the group chat room
         try:
             convo = get_general_conversation()
             join_room(f'convo_{convo.conversation_id}')
@@ -1294,12 +1302,17 @@ def on_connect(auth=None):
 
         socketio.emit('online_users', _online_payload())
 
-
 @socketio.on('disconnect')
 def on_disconnect():
     if current_user.is_authenticated:
         uid = current_user.user_id
-        online_users.pop(uid, None)
+
+        # Remove only THIS socket's sid
+        sids = online_users.get(uid)
+        if sids:
+            sids.discard(request.sid)
+            if not sids:                # only delete when the last socket closes
+                online_users.pop(uid, None)
 
         # If this user was in a call, notify the other side
         for caller_id, info in list(active_calls.items()):
@@ -1363,8 +1376,6 @@ def handle_end_attendance(data):
     sid = int(data.get('session_id') or 0)
     active_attendance_sessions.discard(sid)
     emit('attendance_closed', {'session_id': sid})
-
-
 @socketio.on('call_user')
 def handle_call(data):
     if current_user.role not in ('teacher', 'admin'):
@@ -1372,7 +1383,9 @@ def handle_call(data):
         return
 
     callee_id = int(data['callee_id'])
-    if callee_id not in online_users:
+
+    # User is online if they have at least one active socket
+    if callee_id not in online_users or not online_users[callee_id]:
         emit('call_failed', {'reason': 'User is offline'})
         return
 
@@ -1396,7 +1409,6 @@ def handle_call(data):
         'from_id': current_user.user_id,
         'from_name': caller_name,
     }, room=f'user_{callee_id}')
-
 
 @socketio.on('call_accepted')
 def handle_accept(data):
