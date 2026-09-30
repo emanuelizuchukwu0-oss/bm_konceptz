@@ -224,12 +224,84 @@
 <audio id="remoteAudio" autoplay></audio>
 
 <style>
+  /* ---------- Mobile call panel: sticky at top ---------- */
   @media (max-width: 720px) {
-    #workspace { flex-direction: column; }
-    #callPanel { flex: none; width: 100%; position: static; }
-    #callPanel .card { padding: 14px; }
-    #callTimer { font-size: 24px; }
+
+    /* Workspace stacks vertically on phones */
+    #workspace {
+      flex-direction: column;
+    }
+
+    /* Call panel becomes a fixed bar pinned to the top of the screen */
+    #callPanel {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      width: 100%;
+      z-index: 500;                    /* above content, below modals */
+      flex: none;
+      margin: 0;
+    }
+
+    #callPanel .card {
+      margin: 0;
+      border-radius: 0 0 12px 12px;
+      padding: 12px 16px;
+      background: #1a1a1f;
+      border-top: none;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+    }
+
+    /* Compact the call panel on phones */
+    #callPanel h2 {
+      font-size: 14px;
+      margin-bottom: 6px;
+    }
+    #callTimer {
+      font-size: 22px;
+      margin: 6px 0 !important;
+    }
+    #callPanel .card > div:first-of-type {
+      font-size: 13px;
+      margin: 6px 0 !important;
+    }
+
+    /* Make the mute/end/leave buttons horizontal & compact */
+    #callPanel .btn {
+      padding: 8px 12px;
+      font-size: 13px;
+      margin-bottom: 6px !important;
+    }
+
+    /* Push the rest of the page down when a call is active */
+    body.in-call main {
+      padding-top: 200px;             /* matches call panel height */
+    }
+
+    /* Sticky chat: the messages card grows/shrinks within viewport */
+    #workspace > div:last-child {
+      width: 100%;
+    }
+    #messages {
+      max-height: calc(100vh - 340px);   /* leaves room for input + header */
+      min-height: 200px;
+    }
   }
+
+  /* Slightly tighter mobile spacing on the header card */
+  @media (max-width: 600px) {
+    .card { padding: 14px; }
+    #msgForm { gap: 6px; }
+    #msgForm input,
+    #msgForm button {
+      font-size: 14px;
+    }
+    #messages { font-size: 14px; }
+  }
+  #callPanel .card {
+  padding-top: max(12px, env(safe-area-inset-top));
+}
 </style>
 
 <script>
@@ -605,11 +677,28 @@ const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
     }
 
     // ---------- Panel visibility ----------
-    function showRinging() {
+     function showRinging() {
       document.getElementById('activeName').textContent = 'Calling…';
       document.getElementById('callTimer').textContent = 'Ringing';
       callPanel.style.display = 'block';
+      document.body.classList.add('in-call');   // 👈 ADD
       window.__inCall = true;
+    }
+
+    function showCallPanel(name) {
+      document.getElementById('activeName').textContent = name || 'On Call';
+      callPanel.style.display = 'block';
+      document.body.classList.add('in-call');   // 👈 ADD
+      startTimer();
+      window.__inCall = true;
+    }
+
+    function hideCallPanel() {
+      callPanel.style.display = 'none';
+      document.body.classList.remove('in-call'); // 👈 ADD
+      const t = document.getElementById('callTimer');
+      if (t) t.textContent = '00:00';
+    }
     }
 
     function showCallPanel(name) {
@@ -650,8 +739,7 @@ const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
       });
     }
 
-    // ---------- End local call ----------
-    function endLocalCall() {
+      function endLocalCall() {
       clearRingingTimeout();
       if (pc) { pc.close(); pc = null; }
       if (localStream) {
@@ -660,8 +748,9 @@ const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
       }
       clearInterval(timerInterval);
       timerInterval = null;
-      incomingModal.style.display = 'none';
+      if (incomingModal) incomingModal.style.display = 'none';
       hideCallPanel();
+      document.body.classList.remove('in-call');   // 👈 ADD (idempotent)
       currentCall = { peerId: null, callId: null, isCaller: false, peerName: null };
       window.__inCall = false;
 
