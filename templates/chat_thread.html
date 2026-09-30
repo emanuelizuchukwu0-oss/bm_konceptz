@@ -523,10 +523,9 @@
       submitBtn.textContent = oldLabel;
     }
   });
-
   window.__openLightbox  = openLightbox;
   window.__deleteMessage = deleteMessage;
-  window.__chat = { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds };
+  window.__chat = { CONVO_ID, MY_ID, MY_NAME, MY_ROLE, renderMessage, renderedIds };
 })();
 
 // =====================================================
@@ -537,8 +536,7 @@
     const socket = window.appSocket;
     if (!socket) return false;
 
-    const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
-    const IS_TEACHER = (MY_ROLE === 'teacher' || MY_ROLE === 'admin');
+    const { CONVO_ID, MY_ID, MY_NAME, MY_ROLE, renderMessage, renderedIds } = window.__chat;    const IS_TEACHER = (MY_ROLE === 'teacher' || MY_ROLE === 'admin');
 
     // ---------- Incoming chat messages ----------
     socket.on('new_message', (m) => {
