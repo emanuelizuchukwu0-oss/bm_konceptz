@@ -224,22 +224,44 @@
 <audio id="remoteAudio" autoplay></audio>
 
 <style>
-  /* ---------- Mobile call panel: sticky at top ---------- */
+  /* ---------- Base layout ---------- */
+  #messages {
+    max-height: 60vh;
+    max-height: 60dvh;
+    overflow-y: auto;
+  }
+
+  #callPanel {
+    position: sticky;
+    top: 80px;
+  }
+
+  main {
+    transition: padding-top 0.25s ease;
+  }
+
+  /* Prevent iOS auto-zoom on input focus */
+  input, textarea, select {
+    font-size: 16px;
+  }
+
+  /* ---------- Mobile ---------- */
   @media (max-width: 720px) {
 
-    /* Workspace stacks vertically on phones */
+    /* Workspace stacks vertically */
     #workspace {
       flex-direction: column;
+      min-height: 60dvh;
     }
 
-    /* Call panel becomes a fixed bar pinned to the top of the screen */
+    /* Call panel becomes a fixed bar at the top */
     #callPanel {
       position: fixed;
       top: 0;
       left: 0;
       right: 0;
       width: 100%;
-      z-index: 500;                    /* above content, below modals */
+      z-index: 500;
       flex: none;
       margin: 0;
     }
@@ -248,60 +270,47 @@
       margin: 0;
       border-radius: 0 0 12px 12px;
       padding: 12px 16px;
+      padding-top: max(12px, env(safe-area-inset-top));
       background: #1a1a1f;
       border-top: none;
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
     }
 
-    /* Compact the call panel on phones */
-    #callPanel h2 {
-      font-size: 14px;
-      margin-bottom: 6px;
-    }
-    #callTimer {
-      font-size: 22px;
-      margin: 6px 0 !important;
-    }
+    #callPanel h2 { font-size: 14px; margin-bottom: 6px; }
+    #callTimer   { font-size: 22px; margin: 6px 0 !important; }
     #callPanel .card > div:first-of-type {
-      font-size: 13px;
-      margin: 6px 0 !important;
+      font-size: 13px; margin: 6px 0 !important;
     }
-
-    /* Make the mute/end/leave buttons horizontal & compact */
     #callPanel .btn {
       padding: 8px 12px;
-      font-size: 13px;
+      font-size: 14px;
       margin-bottom: 6px !important;
     }
 
-    /* Push the rest of the page down when a call is active */
+    /* Push page content below the fixed call bar */
     body.in-call main {
-      padding-top: 200px;             /* matches call panel height */
+      padding-top: 190px;
     }
 
-    /* Sticky chat: the messages card grows/shrinks within viewport */
+    /* Sticky-friendly chat container */
+    #messages {
+      max-height: calc(100dvh - 340px);
+      min-height: 180px;
+    }
+
     #workspace > div:last-child {
       width: 100%;
     }
-    #messages {
-      max-height: calc(100vh - 340px);   /* leaves room for input + header */
-      min-height: 200px;
-    }
   }
 
-  /* Slightly tighter mobile spacing on the header card */
+  /* ---------- Very small phones ---------- */
   @media (max-width: 600px) {
     .card { padding: 14px; }
     #msgForm { gap: 6px; }
     #msgForm input,
-    #msgForm button {
-      font-size: 14px;
-    }
+    #msgForm button { font-size: 16px; }
     #messages { font-size: 14px; }
   }
-  #callPanel .card {
-  padding-top: max(12px, env(safe-area-inset-top));
-}
 </style>
 
 <script>
