@@ -26,13 +26,20 @@
     {% endif %}
   </div>
 
-  {% if current_user.role in ('teacher', 'admin') %}
-    <button type="button" class="btn" id="callPickerBtn">
-      📞 Call a Student
-    </button>
-  {% endif %}
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    {% if current_user.role in ('teacher', 'admin') %}
+      <button type="button" class="btn" id="callPickerBtn">
+        📞 Call a Student
+      </button>
+      <form method="POST"
+            action="{{ url_for('clear_chat', conversation_id=convo.conversation_id) }}"
+            onsubmit="return confirm('Delete ALL messages in this chat? This cannot be undone.');"
+            style="margin:0;">
+        <button class="btn btn-danger" type="submit">🗑️ Clear Chat</button>
+      </form>
+    {% endif %}
+  </div>
 </div>
-
 <!-- ===================================================== -->
 <!-- WORKSPACE — call panel (left) + chat (right)          -->
 <!-- ===================================================== -->
@@ -93,38 +100,62 @@
   <div style="flex:1;min-width:0;">
 
     <div class="card" id="messages" style="max-height:60vh;overflow-y:auto;">
-      {% for m in messages %}
-        {% set sender = m.sender %}
-        <div style="margin:10px 0;text-align:{{ 'right' if m.sender_id == current_user.user_id else 'left' }};">
-          <div style="font-size:11px;color:#888;margin-bottom:2px;">
-            <strong>
-              {{ sender.display_name or
-                 (sender.profile.full_name if sender.profile else sender.email) }}
-            </strong>
-            <span class="badge badge-{{ 'active' if sender.role == 'teacher' else 'pending' }}"
-                  style="font-size:9px;padding:2px 6px;">
-              {{ sender.role|upper }}
-            </span>
-          </div>
+{% for m in messages %}
+  {% set sender = m.sender %}
+  {% set is_mine = (m.sender_id == current_user.user_id) %}
+  {% set can_delete = is_mine or current_user.role in ('teacher', 'admin') %}
 
-          <div style="display:inline-block;max-width:75%;padding:10px 14px;border-radius:12px;
-                      word-break:break-word;overflow-wrap:anywhere;
-                      background:{{ '#f0b429' if m.sender_id == current_user.user_id else '#2a2a30' }};
-                      color:{{ '#0f0f12' if m.sender_id == current_user.user_id else '#e8e8ec' }};">
-            {% if m.body %}{{ m.body }}{% endif %}
-            {% if m.media_type == 'image' %}
-              <div style="margin-top:6px;">
-                <img src="{{ url_for('uploaded_file', filename=m.media_url) }}"
-                     style="max-width:100%;border-radius:8px;display:block;">
-              </div>
-            {% elif m.media_type == 'video' %}
-              <div style="margin-top:6px;">
-                <video controls style="max-width:100%;border-radius:8px;display:block;">
-                  <source src="{{ url_for('uploaded_file', filename=m.media_url) }}">
-                </video>
-              </div>
-            {% endif %}
-          </div>
+  <div style="margin:10px 0;text-align:{{ 'right' if is_mine else 'left' }};"
+       data-message-id="{{ m.message_id }}">
+
+    <div style="font-size:11px;color:#888;margin-bottom:2px;
+                display:flex;align-items:center;gap:6px;
+                {{ 'justify-content:flex-end;' if is_mine else 'justify-content:flex-start;' }}">
+      <strong>
+        {{ sender.display_name or
+           (sender.profile.full_name if sender.profile else sender.email) }}
+      </strong>
+      <span class="badge badge-{{ 'active' if sender.role == 'teacher' else 'pending' }}"
+            style="font-size:9px;padding:2px 6px;">
+        {{ sender.role|upper }}
+      </span>
+      {% if can_delete %}
+        <button type="button"
+                onclick="window.__deleteMessage && window.__deleteMessage({{ m.message_id }}, this.closest('[data-message-id]'))"
+                title="Delete message"
+                style="background:transparent;border:none;color:#888;font-size:16px;
+                       font-weight:700;cursor:pointer;padding:0 4px;line-height:1;">
+          ×
+        </button>
+      {% endif %}
+    </div>
+
+    <div style="display:inline-block;max-width:75%;padding:10px 14px;border-radius:12px;
+                word-break:break-word;overflow-wrap:anywhere;
+                background:{{ '#f0b429' if is_mine else '#2a2a30' }};
+                color:{{ '#0f0f12' if is_mine else '#e8e8ec' }};">
+      {% if m.body %}{{ m.body }}{% endif %}
+      {% if m.media_type == 'image' %}
+        <div style="margin-top:6px;">
+          <img src="{{ url_for('uploaded_file', filename=m.media_url) }}"
+               style="max-width:100%;border-radius:8px;display:block;cursor:zoom-in;"
+               onclick="window.__openLightbox && window.__openLightbox(this.src)"
+               alt="">
+        </div>
+      {% elif m.media_type == 'video' %}
+        <div style="margin-top:6px;">
+          <video controls style="max-width:100%;border-radius:8px;display:block;">
+            <source src="{{ url_for('uploaded_file', filename=m.media_url) }}">
+          </video>
+        </div>
+      {% endif %}
+    </div>
+
+    <div style="font-size:11px;color:#666;margin-top:4px;">
+      {{ m.sent_at.strftime('%H:%M') }}
+    </div>
+  </div>
+{% endfor %}
 
           <div style="font-size:11px;color:#666;margin-top:4px;">
             {{ m.sent_at.strftime('%H:%M') }}
@@ -183,6 +214,42 @@
   </div>
 </div>
 
+<!-- ===================================================== -->
+<!-- LIGHTBOX — click any image to view full screen        -->
+<!-- ===================================================== -->
+<div id="imgLightbox"
+     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);
+            z-index:9999;align-items:center;justify-content:center;padding:20px;
+            cursor:zoom-out;">
+  <img id="imgLightboxImg"
+       src=""
+       alt=""
+       style="max-width:100%;max-height:100%;object-fit:contain;
+              border-radius:6px;box-shadow:0 0 40px rgba(0,0,0,0.6);">
+  <button type="button" id="imgLightboxClose"
+          style="position:absolute;top:20px;right:24px;background:#fff;
+                 color:#111;border:none;border-radius:50%;width:40px;height:40px;
+                 font-size:22px;font-weight:700;cursor:pointer;line-height:1;">
+    ×
+  </button>
+</div>
+
+{% if m.media_type == 'image' %}
+  <div style="margin-top:6px;">
+    <img src="{{ url_for('uploaded_file', filename=m.media_url) }}"
+         style="max-width:100%;border-radius:8px;display:block;">
+  </div>
+{% elif m.media_type == 'video' %}
+
+{% if m.media_type == 'image' %}
+  <div style="margin-top:6px;">
+    <img src="{{ url_for('uploaded_file', filename=m.media_url) }}"
+         style="max-width:100%;border-radius:8px;display:block;cursor:zoom-in;"
+         onclick="window.__openLightbox && window.__openLightbox(this.src);"
+         alt="">
+  </div>
+{% elif m.media_type == 'video' %}
+
 <audio id="remoteAudio" autoplay></audio>
 
 <style>
@@ -223,6 +290,32 @@
     fileName.textContent = `Selected: ${f.name} (${sizeMB} MB)${warn}`;
   });
 
+  // ---------- Lightbox ----------
+const lightbox     = document.getElementById('imgLightbox');
+const lightboxImg  = document.getElementById('imgLightboxImg');
+const lightboxClose= document.getElementById('imgLightboxClose');
+
+function openLightbox(src) {
+  lightboxImg.src = src;
+  lightbox.style.display = 'flex';
+  document.body.style.overflow = 'hidden';   // prevent background scroll
+}
+
+function closeLightbox() {
+  lightbox.style.display = 'none';
+  lightboxImg.src = '';
+  document.body.style.overflow = '';
+}
+
+if (lightbox) {
+  lightbox.addEventListener('click', closeLightbox);
+  if (lightboxClose) lightboxClose.addEventListener('click', closeLightbox);
+  // Escape key closes
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && lightbox.style.display === 'flex') closeLightbox();
+  });
+}
+
   // ---------- Helpers ----------
   function scrollBottom() { messages.scrollTop = messages.scrollHeight; }
   setTimeout(scrollBottom, 0);
@@ -232,58 +325,110 @@
     return `<span class="badge ${cls}" style="font-size:9px;padding:2px 6px;">${role.toUpperCase()}</span>`;
   }
 
-  function renderMessage(m) {
-    if (m.message_id && renderedIds.has(m.message_id)) return;
-    if (m.message_id) renderedIds.add(m.message_id);
+function renderMessage(m) {
+  if (m.message_id && renderedIds.has(m.message_id)) return;
+  if (m.message_id) renderedIds.add(m.message_id);
 
-    const mine = Number(m.sender_id) === MY_ID;
-    const wrap = document.createElement('div');
-    wrap.style.cssText = `margin:10px 0;text-align:${mine ? 'right' : 'left'};`;
+  const mine = Number(m.sender_id) === MY_ID;
+  const canDelete = mine || MY_ROLE === 'teacher' || MY_ROLE === 'admin';
 
-    const meta = document.createElement('div');
-    meta.style.cssText = 'font-size:11px;color:#888;margin-bottom:2px;';
-    meta.innerHTML = `<strong></strong> ${roleBadge(m.sender_role || 'student')}`;
-    meta.querySelector('strong').textContent =
-      m.sender_name || (mine ? MY_NAME : 'User');
+  const wrap = document.createElement('div');
+  wrap.style.cssText = `margin:10px 0;text-align:${mine ? 'right' : 'left'};`;
+  if (m.message_id) wrap.dataset.messageId = m.message_id;
 
-    const bubble = document.createElement('div');
-    bubble.style.cssText =
-      'display:inline-block;max-width:75%;padding:10px 14px;border-radius:12px;' +
-      'word-break:break-word;overflow-wrap:anywhere;' +
-      `background:${mine ? '#f0b429' : '#2a2a30'};` +
-      `color:${mine ? '#0f0f12' : '#e8e8ec'};`;
+  // ---- Meta row (name + role + delete button) ----
+  const meta = document.createElement('div');
+  meta.style.cssText =
+    'font-size:11px;color:#888;margin-bottom:2px;' +
+    'display:flex;align-items:center;gap:6px;' +
+    (mine ? 'justify-content:flex-end;' : 'justify-content:flex-start;');
 
-    if (m.body) {
-      const t = document.createElement('div');
-      t.textContent = m.body;
-      bubble.appendChild(t);
-    }
+  const nameEl = document.createElement('strong');
+  nameEl.textContent = m.sender_name || (mine ? MY_NAME : 'User');
 
-    if (m.media_type === 'image' && m.media_url) {
-      const img = document.createElement('img');
-      img.src = '/uploads/' + encodeURIComponent(m.media_url);
-      img.style.cssText = 'max-width:100%;border-radius:8px;display:block;margin-top:6px;';
-      bubble.appendChild(img);
-    } else if (m.media_type === 'video' && m.media_url) {
-      const v = document.createElement('video');
-      v.controls = true;
-      v.style.cssText = 'max-width:100%;border-radius:8px;display:block;margin-top:6px;';
-      const src = document.createElement('source');
-      src.src = '/uploads/' + encodeURIComponent(m.media_url);
-      v.appendChild(src);
-      bubble.appendChild(v);
-    }
+  const badge = document.createElement('span');
+  badge.innerHTML = roleBadge(m.sender_role || 'student');
 
-    const time = document.createElement('div');
-    time.style.cssText = 'font-size:11px;color:#666;margin-top:4px;';
-    time.textContent = m.sent_at || '';
+  meta.appendChild(nameEl);
+  meta.appendChild(badge.firstChild);
 
-    wrap.appendChild(meta);
-    wrap.appendChild(bubble);
-    wrap.appendChild(time);
-    messages.appendChild(wrap);
-    scrollBottom();
+  if (canDelete && m.message_id) {
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.textContent = '×';
+    del.title = 'Delete message';
+    del.style.cssText =
+      'background:transparent;border:none;color:#888;font-size:16px;' +
+      'font-weight:700;cursor:pointer;padding:0 4px;line-height:1;';
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteMessage(m.message_id, wrap);
+    });
+    meta.appendChild(del);
   }
+
+  // ---- Bubble ----
+  const bubble = document.createElement('div');
+  bubble.style.cssText =
+    'display:inline-block;max-width:75%;padding:10px 14px;border-radius:12px;' +
+    'word-break:break-word;overflow-wrap:anywhere;' +
+    `background:${mine ? '#f0b429' : '#2a2a30'};` +
+    `color:${mine ? '#0f0f12' : '#e8e8ec'};`;
+
+  if (m.body) {
+    const t = document.createElement('div');
+    t.textContent = m.body;
+    bubble.appendChild(t);
+  }
+
+  if (m.media_type === 'image' && m.media_url) {
+    const img = document.createElement('img');
+    img.src = '/uploads/' + encodeURIComponent(m.media_url);
+    img.style.cssText =
+      'max-width:100%;border-radius:8px;display:block;margin-top:6px;cursor:zoom-in;';
+    img.addEventListener('click', () => openLightbox && openLightbox(img.src));
+    bubble.appendChild(img);
+  } else if (m.media_type === 'video' && m.media_url) {
+    const v = document.createElement('video');
+    v.controls = true;
+    v.style.cssText =
+      'max-width:100%;border-radius:8px;display:block;margin-top:6px;';
+    const src = document.createElement('source');
+    src.src = '/uploads/' + encodeURIComponent(m.media_url);
+    v.appendChild(src);
+    bubble.appendChild(v);
+  }
+
+  const time = document.createElement('div');
+  time.style.cssText = 'font-size:11px;color:#666;margin-top:4px;';
+  time.textContent = m.sent_at || '';
+
+  wrap.appendChild(meta);
+  wrap.appendChild(bubble);
+  wrap.appendChild(time);
+  messages.appendChild(wrap);
+  scrollBottom();
+}
+
+async function deleteMessage(messageId, wrapEl) {
+  if (!confirm('Delete this message?')) return;
+
+  try {
+    const res = await fetch(`/message/${messageId}/delete`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      alert('Could not delete the message.');
+      return;
+    }
+    // Remove locally right away
+    if (wrapEl && wrapEl.parentNode) wrapEl.parentNode.removeChild(wrapEl);
+    renderedIds.delete(messageId);
+  } catch (err) {
+    console.error('[delete]', err);
+    alert('Network error. Please try again.');
+  }
+}
 
   // ---------- Client-side image compression ----------
   async function compressImage(file, maxWidth = 1600, quality = 0.85) {
@@ -339,6 +484,8 @@
       xhr.send(fd);
     });
   }
+
+  
 
   // ---------- Submit handler ----------
   form.addEventListener('submit', async (e) => {
@@ -398,9 +545,9 @@
       submitBtn.textContent = oldLabel;
     }
   });
-
+window.__openLightbox = openLightbox;
   // ---------- Expose for Phase 2 ----------
-  window.__chat = { CONVO_ID, MY_ID, MY_NAME, renderMessage };
+window.__chat = { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds };
 })();
 
 // =====================================================
@@ -411,7 +558,7 @@
     const socket = window.appSocket;
     if (!socket) return false;
 
-    const { CONVO_ID, MY_ID, MY_NAME, renderMessage } = window.__chat;
+const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
 
     // ---------- Incoming chat messages ----------
     socket.on('new_message', (m) => {
@@ -637,6 +784,8 @@
       }
     });
 
+    
+
     // =====================================================
     // CALLEE — decline
     // =====================================================
@@ -766,6 +915,29 @@
         }
       }
     });
+
+    socket.on('chat_cleared', (data) => {
+  if (Number(data.conversation_id) !== CONVO_ID) return;
+  const box = document.getElementById('messages');
+  if (box) box.innerHTML = '';
+  // Reset dedupe set so re-fetching works if needed
+  if (window.__chat && window.__chat.renderedIds) {
+    window.__chat.renderedIds.clear();
+  }
+  // Show a subtle system note
+  const note = document.createElement('div');
+  note.style.cssText =
+    'text-align:center;font-size:12px;color:#888;margin:20px 0;font-style:italic;';
+  note.textContent = `Chat cleared by ${data.cleared_by}`;
+  box.appendChild(note);
+});
+
+socket.on('message_deleted', (data) => {
+  if (Number(data.conversation_id) !== CONVO_ID) return;
+  const el = document.querySelector(`[data-message-id="${data.message_id}"]`);
+  if (el && el.parentNode) el.parentNode.removeChild(el);
+  if (renderedIds) renderedIds.delete(Number(data.message_id));
+});
 
     // ---------- User-interaction flag (for auto-refresh) ----------
     let interactionTimer = null;
