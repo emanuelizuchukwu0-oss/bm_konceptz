@@ -352,32 +352,40 @@
 
     // ---- Caller ----
     if (callBtn) {
-      callBtn.addEventListener('click', async () => {
-        callBtn.disabled = true;
-        try {
-          const peerId = Number(callBtn.dataset.userId);
-          await getMic();
-          currentCall = { peerId, callId: null, isCaller: true };
-          showCallPanel(callBtn.dataset.userName);
-          socket.emit('call_user', { callee_id: peerId });
-        } catch (err) {
-          console.error('[call] failed:', err);
-          let msg = 'Could not start call.';
-          if (err.name === 'NotAllowedError') {
-            msg = 'Microphone access was blocked. Allow it and reload.';
-          } else if (err.name === 'NotFoundError') {
-            msg = 'No microphone found on this device.';
-          } else if (!socket.connected) {
-            msg = 'Not connected to the server. Please try again.';
-          }
-          alert(msg);
-          endLocalCall();
-        } finally {
-          callBtn.disabled = false;
-        }
-      });
-    }
+callBtn.addEventListener('click', async () => {
+  callBtn.disabled = true;
+  try {
+    const peerId = Number(callBtn.dataset.userId);
+    await getMic();
+    currentCall = { peerId, callId: null, isCaller: true };
+    // ❌ Don't show the panel yet
+    // showCallPanel(callBtn.dataset.userName);
 
+    // Show a "calling…" state instead
+    document.getElementById('activeName').textContent = 'Calling…';
+    document.getElementById('callTimer').textContent = 'Ringing';
+    callPanel.style.display = 'block';
+    window.__inCall = true;
+
+    socket.emit('call_user', { callee_id: peerId });
+
+    // Set a 30-second timeout — if no accept by then, hang up
+    window.__callTimeout = setTimeout(() => {
+      alert('No answer. Call ended.');
+      socket.emit('call_ended', {
+        other_id: peerId,
+        call_id: null
+      });
+      endLocalCall();
+    }, 30000);
+  } catch (err) {
+    console.error('[call] failed:', err);
+    alert('Could not start call.');
+    endLocalCall();
+  } finally {
+    callBtn.disabled = false;
+  }
+});
     // ---- Callee: accept ----
     acceptBtn.addEventListener('click', async () => {
       try {
@@ -423,14 +431,29 @@
     socket.on('incoming_call', showIncomingModal);
     window.addEventListener('call_pending', (e) => showIncomingModal(e.detail));
 
-    socket.on('call_accepted', async () => {
-      createPeer();
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socket.emit('webrtc_offer', { to_id: currentCall.peerId, sdp: offer });
-    });
+   socket.on('call_accepted', async () => {
+  // Clear the ringing timeout
+  if (window.__callTimeout) {
+    clearTimeout(window.__callTimeout);
+    window.__callTimeout = null;
+  }
 
-    socket.on('call_declined', () => { alert('Call declined.'); endLocalCall(); });
+  // NOW start the timer + create the peer
+  showCallPanel(currentCall.peerName || 'On Call');
+  createPeer();
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  socket.emit('webrtc_offer', { to_id: currentCall.peerId, sdp: offer });
+});
+
+    socket.on('call_declined', () => {
+  if (window.__callTimeout) {
+    clearTimeout(window.__callTimeout);
+    window.__callTimeout = null;
+  }
+  alert('Call declined.');
+  endLocalCall();
+});
     socket.on('call_ended',    () => { endLocalCall(); });
     socket.on('call_failed', (d) => { alert(d.reason || 'Call failed'); endLocalCall(); });
 

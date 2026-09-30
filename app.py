@@ -2,6 +2,7 @@ import eventlet
 eventlet.monkey_patch()
 
 import os
+import time
 from datetime import datetime, timedelta, date as _dt_date
 from functools import wraps
 
@@ -20,7 +21,6 @@ from werkzeug.utils import secure_filename
 # ------------------------------------------------------------------
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
-# Upload folder — use Render's persistent disk if present
 RENDER_DISK = '/var/data'
 if os.path.isdir(RENDER_DISK):
     UPLOAD_FOLDER = os.path.join(RENDER_DISK, 'uploads')
@@ -32,7 +32,6 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'pdf', 'mp4', 'mov'}
 
 app = Flask(__name__)
 
-# Secret key — env var wins, local dev fallback
 app.config['SECRET_KEY'] = os.environ.get(
     'SECRET_KEY',
     'change-this-in-production-please'
@@ -40,11 +39,8 @@ app.config['SECRET_KEY'] = os.environ.get(
 
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 if DATABASE_URL:
-    # Normalize Render's 'postgres://' to 'postgresql://'
     if DATABASE_URL.startswith('postgres://'):
         DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
-
-    # Force the psycopg2 driver (avoids SQLAlchemy guessing wrong)
     if DATABASE_URL.startswith('postgresql://'):
         DATABASE_URL = DATABASE_URL.replace(
             'postgresql://', 'postgresql+psycopg2://', 1
@@ -61,14 +57,24 @@ db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode='eventlet',
+    ping_timeout=60,
+    ping_interval=25,
+    logger=False,
+    engineio_logger=False,
+)
 
 # ------------------------------------------------------------------
 # IN-MEMORY STATE
 # ------------------------------------------------------------------
 online_users = {}                   # user_id -> socket sid
 active_attendance_sessions = set()  # session_ids currently open for check-in
-active_calls = {}                   # caller_id -> {callee_id, call_id, from_name}
+active_calls = {}                   # caller_id -> {callee_id, call_id, from_name, started_at}
+
+CALL_TIMEOUT_SECONDS = 60           # FIXED: auto-expire stale ringing calls
 
 
 def allowed_file(filename):
@@ -90,7 +96,6 @@ def notify_teacher_dashboard():
 # PENDING-EVENT HELPERS  (for late joiners)
 # ------------------------------------------------------------------
 def _get_open_attendance_payload():
-    """Return the currently-open attendance window, or None."""
     if not active_attendance_sessions:
         return None
     sid = next(iter(active_attendance_sessions))
@@ -107,7 +112,12 @@ def _get_open_attendance_payload():
 
 def _get_incoming_call_for(user_id):
     """Return the ringing call addressed to this user, or None."""
+    now = time.time()
     for caller_id, info in list(active_calls.items()):
+        # FIXED: expire stale calls so late joiners don't see phantom popups
+        if now - info.get('started_at', 0) > CALL_TIMEOUT_SECONDS:
+            active_calls.pop(caller_id, None)
+            continue
         if info['callee_id'] == user_id:
             return {
                 'call_id': info['call_id'],
@@ -463,8 +473,12 @@ def register():
         db.session.commit()
 
         notify_teacher_dashboard()
-        flash('Account created. Please log in.', 'success')
-        return redirect(url_for('login'))
+
+        # FIXED: auto-login so the new user can immediately send messages, join calls, etc.
+        login_user(user)
+        flash('Account created. Welcome!', 'success')
+        return redirect(url_for('dashboard'))
+
     return render_template('register.html')
 
 
@@ -606,16 +620,11 @@ def api_my_attendance():
 
 
 # ------------------------------------------------------------------
-# PENDING EVENTS API  (for late joiners)
+# PENDING EVENTS API
 # ------------------------------------------------------------------
 @app.route('/api/pending-events')
 @login_required
 def api_pending_events():
-    """
-    Returns events a client should replay on page load:
-      - attendance: currently-open attendance window (students only)
-      - incoming_call: a ringing call addressed to this user
-    """
     result = {'attendance': None, 'incoming_call': None}
 
     if current_user.role == 'student':
@@ -880,6 +889,62 @@ def update_attendance_settings():
 
     flash(f'Attendance set to {days} day(s) per week for {weeks} weeks.', 'success')
     return redirect(url_for('teacher_dashboard'))
+
+
+# FIXED: HTTP fallback for Take Attendance, works even if socket fails
+@app.route('/teacher/start-attendance', methods=['POST'])
+@login_required
+@role_required('teacher', 'admin')
+def start_attendance_http():
+    today = _dt_date.today()
+    sess = TrainingSession.query.filter_by(date=today).first()
+    if not sess:
+        sess = (TrainingSession.query
+                .filter(TrainingSession.date >= today)
+                .order_by(TrainingSession.date.asc())
+                .first())
+    if not sess:
+        sess = (TrainingSession.query
+                .order_by(TrainingSession.date.desc())
+                .first())
+    if not sess:
+        return jsonify({'ok': False, 'error': 'No sessions defined.'}), 400
+
+    active_attendance_sessions.add(sess.session_id)
+
+    teacher_name = current_user.display_name or (
+        current_user.profile.full_name if current_user.profile else current_user.email
+    )
+
+    payload = {
+        'session_id': sess.session_id,
+        'week_number': sess.week_number,
+        'title': sess.title,
+        'date': sess.date.strftime('%b %d, %Y') if sess.date else '',
+        'teacher_name': teacher_name,
+    }
+
+    try:
+        socketio.emit('attendance_requested', payload, room='students')
+    except Exception as e:
+        print('socketio broadcast failed:', e)
+
+    return jsonify({'ok': True, **payload})
+
+
+# FIXED: HTTP fallback for End Attendance
+@app.route('/teacher/end-attendance', methods=['POST'])
+@login_required
+@role_required('teacher', 'admin')
+def end_attendance_http():
+    sid = int(request.form.get('session_id') or 0)
+    if sid:
+        active_attendance_sessions.discard(sid)
+    try:
+        socketio.emit('attendance_closed', {'session_id': sid}, room='students')
+    except Exception:
+        pass
+    return jsonify({'ok': True})
 
 
 @app.route('/teacher/attendance/<int:session_id>', methods=['GET', 'POST'])
@@ -1151,10 +1216,11 @@ def send_message(conversation_id):
         'sent_at': msg.sent_at.strftime('%H:%M'),
     }
 
+    # FIXED: emit only to the other user; sender renders optimistically on the client
     socketio.emit('new_message', payload, room=f'user_{other}')
-    socketio.emit('new_message', payload, room=f'user_{current_user.user_id}')
 
-    return jsonify({'ok': True, 'message_id': msg.message_id})
+    return jsonify({'ok': True, 'message_id': msg.message_id, 'payload': payload})
+
 
 @app.route('/healthz')
 def healthz():
@@ -1205,7 +1271,7 @@ def _online_payload():
 
 
 @socketio.on('connect')
-def on_connect(auth=None):                     # ← accept auth arg
+def on_connect(auth=None):
     if current_user.is_authenticated:
         online_users[current_user.user_id] = request.sid
         join_room(f'user_{current_user.user_id}')
@@ -1215,14 +1281,24 @@ def on_connect(auth=None):                     # ← accept auth arg
         elif current_user.role in ('teacher', 'admin'):
             join_room('teachers')
 
-        # Broadcast to everyone (no broadcast=True needed in v5)
         socketio.emit('online_users', _online_payload())
+
 
 @socketio.on('disconnect')
 def on_disconnect():
     if current_user.is_authenticated:
-        online_users.pop(current_user.user_id, None)
-        socketio.emit('online_users', _online_payload())     # ← no broadcast kwarg
+        uid = current_user.user_id
+        online_users.pop(uid, None)
+
+        # FIXED: notify the other side if this user was in a call
+        for caller_id, info in list(active_calls.items()):
+            if info['callee_id'] == uid or caller_id == uid:
+                other = info['callee_id'] if caller_id == uid else caller_id
+                socketio.emit('call_ended', {'by_id': uid}, room=f'user_{other}')
+                active_calls.pop(caller_id, None)
+
+        socketio.emit('online_users', _online_payload())
+
 
 @socketio.on('request_online_users')
 def handle_request_online_users():
@@ -1297,11 +1373,12 @@ def handle_call(data):
         current_user.profile.full_name if current_user.profile else current_user.email
     )
 
-    # Track ringing call so late joiners can find it
+    # FIXED: track started_at so stale calls can be expired
     active_calls[current_user.user_id] = {
         'callee_id': callee_id,
         'call_id': log.call_id,
         'from_name': caller_name,
+        'started_at': time.time(),
     }
 
     emit('incoming_call', {
@@ -1314,6 +1391,10 @@ def handle_call(data):
 @socketio.on('call_accepted')
 def handle_accept(data):
     caller_id = int(data['caller_id'])
+    # FIXED: clear the ringing flag now that the call has been accepted
+    info = active_calls.get(caller_id)
+    if info:
+        info.pop('started_at', None)
     emit('call_accepted', {'by_id': current_user.user_id}, room=f'user_{caller_id}')
 
 
@@ -1362,8 +1443,6 @@ def webrtc_answer(data):
 def webrtc_ice(data):
     emit('webrtc_ice', {'from_id': current_user.user_id, 'candidate': data['candidate']},
          room=f"user_{data['to_id']}")
-
-    
 
 
 # ------------------------------------------------------------------
@@ -1465,7 +1544,7 @@ def seed():
 
 
 # ------------------------------------------------------------------
-# BOOTSTRAP — runs under gunicorn AND `python app.py`
+# BOOTSTRAP
 # ------------------------------------------------------------------
 with app.app_context():
     db.create_all()
@@ -1473,7 +1552,7 @@ with app.app_context():
 
 
 # ------------------------------------------------------------------
-# RUN  (only when started directly, not under gunicorn)
+# RUN
 # ------------------------------------------------------------------
 if __name__ == '__main__':
     socketio.run(app, debug=True, use_reloader=False,

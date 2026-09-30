@@ -283,13 +283,40 @@ window.onSocketReady(() => {
 
   let activeSessionId = null;
 
-  takeBtn.addEventListener('click', () => {
-    takeBtn.disabled = true;
-    statusEl.textContent = 'Opening attendance window…';
-    if (!socket.connected) socket.connect();
-    socket.emit('start_attendance', {});
-  });
+takeBtn.addEventListener('click', async () => {
+  takeBtn.disabled = true;
+  statusEl.textContent = 'Opening attendance window…';
+  try {
+    const res = await fetch('/teacher/start-attendance', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      statusEl.textContent = '❌ ' + (data.error || 'Could not start');
+      takeBtn.disabled = false;
+      return;
+    }
+    activeSessionId = data.session_id;
+    logBox.innerHTML = '<em style="color:#888;">Waiting for students to check in…</em>';
+    panel.style.display = 'block';
+    statusEl.textContent = `Open for Week ${data.week_number} — ${data.title}`;
+  } catch (err) {
+    statusEl.textContent = '⚠️ Connection problem';
+    takeBtn.disabled = false;
+  }
+});
 
+stopBtn.addEventListener('click', async () => {
+  try {
+    await fetch('/teacher/end-attendance', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: new URLSearchParams({ session_id: activeSessionId || '' })
+    });
+  } catch (e) { console.warn(e); }
+  panel.style.display = 'none';
+  takeBtn.disabled = false;
+  statusEl.textContent = 'Attendance window closed.';
+  activeSessionId = null;
+});
   stopBtn.addEventListener('click', () => {
     if (activeSessionId) {
       socket.emit('end_attendance', { session_id: activeSessionId });
