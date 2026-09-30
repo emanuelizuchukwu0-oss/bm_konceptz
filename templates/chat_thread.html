@@ -26,10 +26,10 @@
     {% endif %}
   </div>
 
-   <div style="display:flex;gap:8px;flex-wrap:wrap;">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
     {% if current_user.is_authenticated and current_user.role in ('teacher', 'admin') %}
       <button type="button" class="btn" id="callPickerBtn">
-        📞 Call a Student
+        📞 Start Group Call
       </button>
     {% endif %}
   </div>
@@ -37,17 +37,11 @@
 
 <!-- ===================================================== -->
 <!-- WORKSPACE                                             -->
- 
-
-<!-- ===================================================== -->
-<!-- WORKSPACE                                             -->
 <!-- ===================================================== -->
 <div id="workspace" style="display:flex;gap:14px;align-items:flex-start;">
 
-  <!-- CALL PANEL — TEACHER/ADMIN -->
-  {% if current_user.is_authenticated and current_user.role in ('teacher', 'admin') %}
-  <div id="callPanel"
-       style="display:none;flex:0 0 300px;position:sticky;top:80px;">
+  <!-- CALL PANEL -->
+  <div id="callPanel" style="display:none;flex:0 0 300px;">
     <div class="card" style="text-align:center;">
       <h2 style="margin-bottom:12px;">📞 Live Call</h2>
       <div style="margin:14px 0;color:#f0b429;font-weight:600;" id="activeName">—</div>
@@ -56,43 +50,27 @@
         Talk while you chat — share photos, videos, or text
         without leaving the call.
       </div>
-      <button type="button" class="btn btn-secondary" id="muteBtn"
-              style="width:100%;margin-bottom:10px;">
-        🎤 Mute My Mic
-      </button>
-      <button type="button" class="btn btn-danger" id="hangupBtn" style="width:100%;">
-        ⏹ End Call
-      </button>
-    </div>
-  </div>
-  {% endif %}
 
-  <!-- CALL PANEL — STUDENT -->
-  {% if current_user.is_authenticated and current_user.role == 'student' %}
-  <div id="callPanel"
-       style="display:none;flex:0 0 300px;position:sticky;top:80px;">
-    <div class="card" style="text-align:center;">
-      <h2 style="margin-bottom:12px;">📞 Live Call</h2>
-      <div style="margin:14px 0;color:#f0b429;font-weight:600;" id="activeName">—</div>
-      <div id="callTimer" style="font-size:32px;font-weight:700;margin:10px 0;">00:00</div>
-      <div style="font-size:12px;color:#888;margin-bottom:16px;">
-        You can mute your mic or leave, but only the teacher can end the call.
-      </div>
       <button type="button" class="btn btn-secondary" id="muteBtn"
               style="width:100%;margin-bottom:10px;">
         🎤 Mute My Mic
       </button>
-      <button type="button" class="btn btn-secondary" id="leaveBtn" style="width:100%;">
-        🚪 Leave Call
-      </button>
+
+      {% if current_user.is_authenticated and current_user.role in ('teacher', 'admin') %}
+        <button type="button" class="btn btn-danger" id="hangupBtn" style="width:100%;">
+          ⏹ End Call
+        </button>
+      {% else %}
+        <button type="button" class="btn btn-secondary" id="leaveBtn" style="width:100%;">
+          🚪 Leave Call
+        </button>
+      {% endif %}
     </div>
   </div>
-  {% endif %}
 
   <!-- CHAT PANEL -->
   <div style="flex:1;min-width:0;">
-
-    <div class="card" id="messages" style="max-height:60vh;overflow-y:auto;">
+    <div class="card" id="messages" style="overflow-y:auto;">
       {% for m in messages %}
         {% set sender = m.sender %}
         {% set is_mine = (m.sender_id == current_user.user_id) %}
@@ -168,34 +146,17 @@
 </div>
 
 <!-- ===================================================== -->
-<!-- CALL PICKER MODAL                                     -->
-<!-- ===================================================== -->
-<div id="callPicker"
-     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);
-            z-index:100;align-items:center;justify-content:center;">
-  <div class="card" style="max-width:420px;width:90%;">
-    <h2 style="margin-bottom:12px;">📞 Choose a student to call</h2>
-    <div id="callPickerList"
-         style="max-height:400px;overflow-y:auto;font-size:14px;">
-      <em style="color:#888;">Loading…</em>
-    </div>
-    <button type="button" class="btn btn-secondary" id="callPickerClose"
-            style="width:100%;margin-top:14px;">Cancel</button>
-  </div>
-</div>
-
-<!-- ===================================================== -->
 <!-- INCOMING CALL MODAL                                   -->
 <!-- ===================================================== -->
 <div id="incomingCall"
      style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);
             z-index:100;align-items:center;justify-content:center;">
   <div class="card" style="text-align:center;max-width:340px;">
-    <h2>📞 Incoming Call</h2>
+    <h2>📞 Incoming Group Call</h2>
     <p id="callerName" style="margin:16px 0;color:#f0b429;font-weight:600;"></p>
     <div style="display:flex;gap:10px;justify-content:center;">
       <button type="button" class="btn" id="acceptBtn"
-              style="background:#6ee7a7;color:#0f0f12;">✅ Accept</button>
+              style="background:#6ee7a7;color:#0f0f12;">✅ Join</button>
       <button type="button" class="btn btn-danger" id="declineBtn">❌ Decline</button>
     </div>
   </div>
@@ -208,9 +169,7 @@
      style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);
             z-index:9999;align-items:center;justify-content:center;padding:20px;
             cursor:zoom-out;">
-  <img id="imgLightboxImg"
-       src=""
-       alt=""
+  <img id="imgLightboxImg" src="" alt=""
        style="max-width:100%;max-height:100%;object-fit:contain;
               border-radius:6px;box-shadow:0 0 40px rgba(0,0,0,0.6);">
   <button type="button" id="imgLightboxClose"
@@ -221,10 +180,11 @@
   </button>
 </div>
 
-<audio id="remoteAudio" autoplay></audio>
+<!-- Hidden audio outputs -->
+<audio id="remoteAudio" autoplay playsinline webkit-playsinline></audio>
+<div id="remoteAudios" style="display:none;"></div>
 
 <style>
-  /* ---------- Base layout ---------- */
   #messages {
     max-height: 60vh;
     max-height: 60dvh;
@@ -240,21 +200,16 @@
     transition: padding-top 0.25s ease;
   }
 
-  /* Prevent iOS auto-zoom on input focus */
   input, textarea, select {
     font-size: 16px;
   }
 
-  /* ---------- Mobile ---------- */
   @media (max-width: 720px) {
-
-    /* Workspace stacks vertically */
     #workspace {
       flex-direction: column;
       min-height: 60dvh;
     }
 
-    /* Call panel becomes a fixed bar at the top */
     #callPanel {
       position: fixed;
       top: 0;
@@ -287,12 +242,10 @@
       margin-bottom: 6px !important;
     }
 
-    /* Push page content below the fixed call bar */
     body.in-call main {
       padding-top: 190px;
     }
 
-    /* Sticky-friendly chat container */
     #messages {
       max-height: calc(100dvh - 340px);
       min-height: 180px;
@@ -303,7 +256,6 @@
     }
   }
 
-  /* ---------- Very small phones ---------- */
   @media (max-width: 600px) {
     .card { padding: 14px; }
     #msgForm { gap: 6px; }
@@ -323,17 +275,38 @@
   const MY_NAME  = {{ (current_user.display_name or current_user.email) | tojson }};
   const MY_ROLE  = "{{ current_user.role }}";
 
-  // ---------- DOM refs ----------
   const form      = document.getElementById('msgForm');
   const input     = document.getElementById('msgInput');
   const fileInput = document.getElementById('fileInput');
   const fileName  = document.getElementById('fileName');
   const messages  = document.getElementById('messages');
 
-  // ---------- Message dedupe ----------
   const renderedIds = new Set();
 
-  // ---------- File label with size ----------
+  // ---------- Lightbox ----------
+  const lightbox      = document.getElementById('imgLightbox');
+  const lightboxImg   = document.getElementById('imgLightboxImg');
+  const lightboxClose = document.getElementById('imgLightboxClose');
+
+  function openLightbox(src) {
+    lightboxImg.src = src;
+    lightbox.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+  }
+  function closeLightbox() {
+    lightbox.style.display = 'none';
+    lightboxImg.src = '';
+    document.body.style.overflow = '';
+  }
+  if (lightbox) {
+    lightbox.addEventListener('click', closeLightbox);
+    if (lightboxClose) lightboxClose.addEventListener('click', closeLightbox);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && lightbox.style.display === 'flex') closeLightbox();
+    });
+  }
+
+  // ---------- File input label ----------
   fileInput.addEventListener('change', () => {
     const f = fileInput.files[0];
     if (!f) { fileName.textContent = ''; return; }
@@ -342,33 +315,6 @@
     fileName.textContent = `Selected: ${f.name} (${sizeMB} MB)${warn}`;
   });
 
-  // ---------- Lightbox ----------
-const lightbox     = document.getElementById('imgLightbox');
-const lightboxImg  = document.getElementById('imgLightboxImg');
-const lightboxClose= document.getElementById('imgLightboxClose');
-
-function openLightbox(src) {
-  lightboxImg.src = src;
-  lightbox.style.display = 'flex';
-  document.body.style.overflow = 'hidden';   // prevent background scroll
-}
-
-function closeLightbox() {
-  lightbox.style.display = 'none';
-  lightboxImg.src = '';
-  document.body.style.overflow = '';
-}
-
-if (lightbox) {
-  lightbox.addEventListener('click', closeLightbox);
-  if (lightboxClose) lightboxClose.addEventListener('click', closeLightbox);
-  // Escape key closes
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && lightbox.style.display === 'flex') closeLightbox();
-  });
-}
-
-  // ---------- Helpers ----------
   function scrollBottom() { messages.scrollTop = messages.scrollHeight; }
   setTimeout(scrollBottom, 0);
 
@@ -377,112 +323,102 @@ if (lightbox) {
     return `<span class="badge ${cls}" style="font-size:9px;padding:2px 6px;">${role.toUpperCase()}</span>`;
   }
 
-function renderMessage(m) {
-  if (m.message_id && renderedIds.has(m.message_id)) return;
-  if (m.message_id) renderedIds.add(m.message_id);
+  function renderMessage(m) {
+    if (m.message_id && renderedIds.has(m.message_id)) return;
+    if (m.message_id) renderedIds.add(m.message_id);
 
-  const mine = Number(m.sender_id) === MY_ID;
-  const canDelete = mine || MY_ROLE === 'teacher' || MY_ROLE === 'admin';
+    const mine = Number(m.sender_id) === MY_ID;
+    const canDelete = mine || MY_ROLE === 'teacher' || MY_ROLE === 'admin';
 
-  const wrap = document.createElement('div');
-  wrap.style.cssText = `margin:10px 0;text-align:${mine ? 'right' : 'left'};`;
-  if (m.message_id) wrap.dataset.messageId = m.message_id;
+    const wrap = document.createElement('div');
+    wrap.style.cssText = `margin:10px 0;text-align:${mine ? 'right' : 'left'};`;
+    if (m.message_id) wrap.dataset.messageId = m.message_id;
 
-  // ---- Meta row (name + role + delete button) ----
-  const meta = document.createElement('div');
-  meta.style.cssText =
-    'font-size:11px;color:#888;margin-bottom:2px;' +
-    'display:flex;align-items:center;gap:6px;' +
-    (mine ? 'justify-content:flex-end;' : 'justify-content:flex-start;');
+    const meta = document.createElement('div');
+    meta.style.cssText =
+      'font-size:11px;color:#888;margin-bottom:2px;' +
+      'display:flex;align-items:center;gap:6px;' +
+      (mine ? 'justify-content:flex-end;' : 'justify-content:flex-start;');
 
-  const nameEl = document.createElement('strong');
-  nameEl.textContent = m.sender_name || (mine ? MY_NAME : 'User');
+    const nameEl = document.createElement('strong');
+    nameEl.textContent = m.sender_name || (mine ? MY_NAME : 'User');
 
-  const badge = document.createElement('span');
-  badge.innerHTML = roleBadge(m.sender_role || 'student');
+    const badge = document.createElement('span');
+    badge.innerHTML = roleBadge(m.sender_role || 'student');
 
-  meta.appendChild(nameEl);
-  meta.appendChild(badge.firstChild);
+    meta.appendChild(nameEl);
+    if (badge.firstChild) meta.appendChild(badge.firstChild);
 
-  if (canDelete && m.message_id) {
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.textContent = '×';
-    del.title = 'Delete message';
-    del.style.cssText =
-      'background:transparent;border:none;color:#888;font-size:16px;' +
-      'font-weight:700;cursor:pointer;padding:0 4px;line-height:1;';
-    del.addEventListener('click', (e) => {
-      e.stopPropagation();
-      deleteMessage(m.message_id, wrap);
-    });
-    meta.appendChild(del);
-  }
-
-  // ---- Bubble ----
-  const bubble = document.createElement('div');
-  bubble.style.cssText =
-    'display:inline-block;max-width:75%;padding:10px 14px;border-radius:12px;' +
-    'word-break:break-word;overflow-wrap:anywhere;' +
-    `background:${mine ? '#f0b429' : '#2a2a30'};` +
-    `color:${mine ? '#0f0f12' : '#e8e8ec'};`;
-
-  if (m.body) {
-    const t = document.createElement('div');
-    t.textContent = m.body;
-    bubble.appendChild(t);
-  }
-
-  if (m.media_type === 'image' && m.media_url) {
-    const img = document.createElement('img');
-    img.src = '/uploads/' + encodeURIComponent(m.media_url);
-    img.style.cssText =
-      'max-width:100%;border-radius:8px;display:block;margin-top:6px;cursor:zoom-in;';
-    img.addEventListener('click', () => openLightbox && openLightbox(img.src));
-    bubble.appendChild(img);
-  } else if (m.media_type === 'video' && m.media_url) {
-    const v = document.createElement('video');
-    v.controls = true;
-    v.style.cssText =
-      'max-width:100%;border-radius:8px;display:block;margin-top:6px;';
-    const src = document.createElement('source');
-    src.src = '/uploads/' + encodeURIComponent(m.media_url);
-    v.appendChild(src);
-    bubble.appendChild(v);
-  }
-
-  const time = document.createElement('div');
-  time.style.cssText = 'font-size:11px;color:#666;margin-top:4px;';
-  time.textContent = m.sent_at || '';
-
-  wrap.appendChild(meta);
-  wrap.appendChild(bubble);
-  wrap.appendChild(time);
-  messages.appendChild(wrap);
-  scrollBottom();
-}
-
-async function deleteMessage(messageId, wrapEl) {
-  if (!confirm('Delete this message?')) return;
-
-  try {
-    const res = await fetch(`/message/${messageId}/delete`, {
-      method: 'POST',
-    });
-    if (!res.ok) {
-      alert('Could not delete the message.');
-      return;
+    if (canDelete && m.message_id) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.textContent = '×';
+      del.title = 'Delete message';
+      del.style.cssText =
+        'background:transparent;border:none;color:#888;font-size:16px;' +
+        'font-weight:700;cursor:pointer;padding:0 4px;line-height:1;';
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteMessage(m.message_id, wrap);
+      });
+      meta.appendChild(del);
     }
-    // Remove locally right away
-    if (wrapEl && wrapEl.parentNode) wrapEl.parentNode.removeChild(wrapEl);
-    renderedIds.delete(messageId);
-  } catch (err) {
-    console.error('[delete]', err);
-    alert('Network error. Please try again.');
-  }
-}
 
-  // ---------- Client-side image compression ----------
+    const bubble = document.createElement('div');
+    bubble.style.cssText =
+      'display:inline-block;max-width:75%;padding:10px 14px;border-radius:12px;' +
+      'word-break:break-word;overflow-wrap:anywhere;' +
+      `background:${mine ? '#f0b429' : '#2a2a30'};` +
+      `color:${mine ? '#0f0f12' : '#e8e8ec'};`;
+
+    if (m.body) {
+      const t = document.createElement('div');
+      t.textContent = m.body;
+      bubble.appendChild(t);
+    }
+
+    if (m.media_type === 'image' && m.media_url) {
+      const img = document.createElement('img');
+      img.src = '/uploads/' + encodeURIComponent(m.media_url);
+      img.style.cssText =
+        'max-width:100%;border-radius:8px;display:block;margin-top:6px;cursor:zoom-in;';
+      img.addEventListener('click', () => openLightbox(img.src));
+      bubble.appendChild(img);
+    } else if (m.media_type === 'video' && m.media_url) {
+      const v = document.createElement('video');
+      v.controls = true;
+      v.style.cssText =
+        'max-width:100%;border-radius:8px;display:block;margin-top:6px;';
+      const src = document.createElement('source');
+      src.src = '/uploads/' + encodeURIComponent(m.media_url);
+      v.appendChild(src);
+      bubble.appendChild(v);
+    }
+
+    const time = document.createElement('div');
+    time.style.cssText = 'font-size:11px;color:#666;margin-top:4px;';
+    time.textContent = m.sent_at || '';
+
+    wrap.appendChild(meta);
+    wrap.appendChild(bubble);
+    wrap.appendChild(time);
+    messages.appendChild(wrap);
+    scrollBottom();
+  }
+
+  async function deleteMessage(messageId, wrapEl) {
+    if (!confirm('Delete this message?')) return;
+    try {
+      const res = await fetch(`/message/${messageId}/delete`, { method: 'POST' });
+      if (!res.ok) { alert('Could not delete the message.'); return; }
+      if (wrapEl && wrapEl.parentNode) wrapEl.parentNode.removeChild(wrapEl);
+      renderedIds.delete(Number(messageId));
+    } catch (err) {
+      console.error('[delete]', err);
+      alert('Network error. Please try again.');
+    }
+  }
+
   async function compressImage(file, maxWidth = 1600, quality = 0.85) {
     if (!file.type.startsWith('image/')) return file;
     if (file.type === 'image/gif') return file;
@@ -495,7 +431,6 @@ async function deleteMessage(messageId, wrapEl) {
         canvas.width  = Math.round(img.width * scale);
         canvas.height = Math.round(img.height * scale);
         canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-
         canvas.toBlob(
           (blob) => {
             if (!blob) return resolve(file);
@@ -511,16 +446,13 @@ async function deleteMessage(messageId, wrapEl) {
     });
   }
 
-  // ---------- Upload with progress ----------
   function uploadWithProgress(url, fd, onProgress) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url);
-
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
       };
-
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
           try { resolve(JSON.parse(xhr.responseText)); }
@@ -532,14 +464,10 @@ async function deleteMessage(messageId, wrapEl) {
       xhr.onerror = () => reject(new Error('Network error'));
       xhr.ontimeout = () => reject(new Error('Upload timeout'));
       xhr.timeout = 90000;
-
       xhr.send(fd);
     });
   }
 
-  
-
-  // ---------- Submit handler ----------
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const body = input.value.trim();
@@ -549,7 +477,6 @@ async function deleteMessage(messageId, wrapEl) {
     const submitBtn = form.querySelector('button[type="submit"]');
     const oldLabel = submitBtn.textContent;
 
-    // Size guard
     if (file && file.size > 15 * 1024 * 1024) {
       alert('File too large. Max 15 MB.');
       return;
@@ -574,7 +501,6 @@ async function deleteMessage(messageId, wrapEl) {
         (pct) => { submitBtn.textContent = `Uploading… ${pct}%`; }
       );
 
-      // Optimistic render of own message
       renderMessage({
         message_id: data.payload.message_id,
         sender_id: MY_ID,
@@ -597,20 +523,22 @@ async function deleteMessage(messageId, wrapEl) {
       submitBtn.textContent = oldLabel;
     }
   });
-window.__openLightbox = openLightbox;
-  // ---------- Expose for Phase 2 ----------
-window.__chat = { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds };
+
+  window.__openLightbox  = openLightbox;
+  window.__deleteMessage = deleteMessage;
+  window.__chat = { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds };
 })();
 
 // =====================================================
-// PHASE 2 — Socket listeners + WebRTC
+// PHASE 2 — Socket listeners + WebRTC (group calls only)
 // =====================================================
 (function () {
   function attach() {
     const socket = window.appSocket;
     if (!socket) return false;
 
-const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
+    const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
+    const IS_TEACHER = (MY_ROLE === 'teacher' || MY_ROLE === 'admin');
 
     // ---------- Incoming chat messages ----------
     socket.on('new_message', (m) => {
@@ -618,29 +546,55 @@ const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
       renderMessage(m);
     });
 
-    // =====================================================
-    // WebRTC state
-    // =====================================================
-    let pc = null;
-    let localStream = null;
-    let currentCall = { peerId: null, callId: null, isCaller: false, peerName: null };
-    let timerInterval = null;
-    let ringingTimeout = null;
-    let isMicMuted = false;
+    // ---------- Message deleted (server broadcast) ----------
+    socket.on('message_deleted', (data) => {
+      if (Number(data.conversation_id) !== CONVO_ID) return;
+      const el = document.querySelector(`[data-message-id="${data.message_id}"]`);
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+      if (renderedIds) renderedIds.delete(Number(data.message_id));
+    });
 
-    // ---------- Call-related DOM refs ----------
-    const callPanel       = document.getElementById('callPanel');
-    const incomingModal   = document.getElementById('incomingCall');
-    const acceptBtn       = document.getElementById('acceptBtn');
-    const declineBtn      = document.getElementById('declineBtn');
-    const hangupBtn       = document.getElementById('hangupBtn');    // teacher only
-    const leaveBtn        = document.getElementById('leaveBtn');     // student only
-    const muteBtn         = document.getElementById('muteBtn');      // both
-    const remoteAudio     = document.getElementById('remoteAudio');
-    const callPicker      = document.getElementById('callPicker');
-    const callPickerList  = document.getElementById('callPickerList');
-    const callPickerBtn   = document.getElementById('callPickerBtn');
-    const callPickerClose = document.getElementById('callPickerClose');
+    // =====================================================
+    // Media — mic helpers
+    // =====================================================
+    let localStream = null;
+
+    async function getMic() {
+      if (localStream) {
+        const live = localStream.getAudioTracks().some(t => t.readyState === 'live');
+        if (live) return localStream;
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+      }
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false
+      });
+      return localStream;
+    }
+
+    async function stopLocalStream() {
+      if (!localStream) return;
+      localStream.getTracks().forEach(t => t.stop());
+      localStream = null;
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    // =====================================================
+    // Call-related DOM
+    // =====================================================
+    const callPanel     = document.getElementById('callPanel');
+    const incomingModal = document.getElementById('incomingCall');
+    const acceptBtn     = document.getElementById('acceptBtn');
+    const declineBtn    = document.getElementById('declineBtn');
+    const hangupBtn     = document.getElementById('hangupBtn');
+    const leaveBtn      = document.getElementById('leaveBtn');
+    const muteBtn       = document.getElementById('muteBtn');
+    const callPickerBtn = document.getElementById('callPickerBtn');
 
     const RTC_CONFIG = {
       iceServers: [
@@ -649,253 +603,8 @@ const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
       ]
     };
 
-    // ---------- Mic + Peer ----------
-    async function getMic() {
-      if (!localStream) {
-        localStream = await navigator.mediaDevices.getUserMedia({
-          audio: true, video: false
-        });
-      }
-      return localStream;
-    }
-
-    function createPeer() {
-      pc = new RTCPeerConnection(RTC_CONFIG);
-      localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-      pc.ontrack = (e) => { remoteAudio.srcObject = e.streams[0]; };
-      pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          socket.emit('webrtc_ice', {
-            to_id: currentCall.peerId, candidate: e.candidate
-          });
-        }
-      };
-      return pc;
-    }
-
-    // ---------- Timer ----------
-    function startTimer() {
-      const start = Date.now();
-      clearInterval(timerInterval);
-      timerInterval = setInterval(() => {
-        const s = Math.floor((Date.now() - start) / 1000);
-        document.getElementById('callTimer').textContent =
-          String(Math.floor(s / 60)).padStart(2, '0') + ':' +
-          String(s % 60).padStart(2, '0');
-      }, 1000);
-    }
-
-    // ---------- Panel visibility ----------
-    function showRinging() {
-      document.getElementById('activeName').textContent = 'Calling…';
-      document.getElementById('callTimer').textContent = 'Ringing';
-      callPanel.style.display = 'block';
-      document.body.classList.add('in-call');
-      window.__inCall = true;
-    }
-
-    function showCallPanel(name) {
-      document.getElementById('activeName').textContent = name || 'On Call';
-      callPanel.style.display = 'block';
-      document.body.classList.add('in-call');
-      startTimer();
-      window.__inCall = true;
-    }
-
-    function hideCallPanel() {
-      callPanel.style.display = 'none';
-      document.body.classList.remove('in-call');
-      const t = document.getElementById('callTimer');
-      if (t) t.textContent = '00:00';
-    }
-
-    function clearRingingTimeout() {
-      if (ringingTimeout) {
-        clearTimeout(ringingTimeout);
-        ringingTimeout = null;
-      }
-    }
-
-    // ---------- Mute button ----------
-    function updateMuteBtn() {
-      if (!muteBtn) return;
-      muteBtn.textContent = isMicMuted ? '🔇 Unmute My Mic' : '🎤 Mute My Mic';
-      muteBtn.style.background = isMicMuted ? '#e04a4a' : '';
-      muteBtn.style.color = isMicMuted ? '#fff' : '';
-    }
-
-    if (muteBtn) {
-      muteBtn.addEventListener('click', () => {
-        if (!localStream) return;
-        isMicMuted = !isMicMuted;
-        localStream.getAudioTracks().forEach(track => {
-          track.enabled = !isMicMuted;
-        });
-        updateMuteBtn();
-      });
-    }
-
-      function endLocalCall() {
-      clearRingingTimeout();
-      if (pc) { pc.close(); pc = null; }
-      if (localStream) {
-        localStream.getTracks().forEach(t => t.stop());
-        localStream = null;
-      }
-      clearInterval(timerInterval);
-      timerInterval = null;
-      if (incomingModal) incomingModal.style.display = 'none';
-      hideCallPanel();
-      document.body.classList.remove('in-call');   // 👈 ADD (idempotent)
-      currentCall = { peerId: null, callId: null, isCaller: false, peerName: null };
-      window.__inCall = false;
-
-      isMicMuted = false;
-      updateMuteBtn();
-    }
-
-    // ---------- Start a call ----------
-    async function initiateCall(peerId, peerName) {
-      try {
-        await getMic();
-        currentCall = { peerId, callId: null, isCaller: true, peerName };
-        showRinging();
-        socket.emit('call_user', { callee_id: peerId });
-
-        ringingTimeout = setTimeout(() => {
-          alert('No answer. Call ended.');
-          socket.emit('call_ended', { other_id: peerId, call_id: null });
-          endLocalCall();
-        }, 30000);
-      } catch (err) {
-        console.error('[call] failed:', err);
-        let msg = 'Could not start call.';
-        if (err.name === 'NotAllowedError') {
-          msg = 'Microphone access was blocked. Allow it and reload.';
-        } else if (err.name === 'NotFoundError') {
-          msg = 'No microphone found on this device.';
-        } else if (!socket.connected) {
-          msg = 'Not connected to the server. Please try again.';
-        }
-        alert(msg);
-        endLocalCall();
-      }
-    }
-
     // =====================================================
-    // CALL PICKER (teacher/admin)
-    // =====================================================
-    function openCallPicker() {
-      callPicker.style.display = 'flex';
-
-      const users = (window.__onlineUsers || []).filter(u =>
-        u.role === 'student' && u.user_id !== MY_ID
-      );
-
-      if (!users.length) {
-        callPickerList.innerHTML =
-          '<em style="color:#888;">No students online right now.</em>';
-        return;
-      }
-
-      callPickerList.innerHTML = '';
-      users.forEach(u => {
-        const row = document.createElement('button');
-        row.type = 'button';
-        row.className = 'btn btn-secondary';
-        row.style.cssText = 'width:100%;margin-bottom:8px;text-align:left;display:block;';
-        row.textContent = `📞 ${u.name}`;
-        row.onclick = () => {
-          callPicker.style.display = 'none';
-          initiateCall(u.user_id, u.name);
-        };
-        callPickerList.appendChild(row);
-      });
-    }
-
-    if (callPickerBtn) callPickerBtn.addEventListener('click', openCallPicker);
-    if (callPickerClose) {
-      callPickerClose.addEventListener('click', () => {
-        callPicker.style.display = 'none';
-      });
-    }
-
-    // =====================================================
-    // CALLEE — accept
-    // =====================================================
-    acceptBtn.addEventListener('click', async () => {
-      try {
-        await getMic();
-        incomingModal.style.display = 'none';
-        showCallPanel(document.getElementById('callerName').textContent);
-        socket.emit('call_accepted', { caller_id: currentCall.peerId });
-      } catch (err) {
-        console.error('[accept] failed:', err);
-        alert('Mic denied.');
-        socket.emit('call_declined', {
-          caller_id: currentCall.peerId,
-          call_id: currentCall.callId
-        });
-        endLocalCall();
-      }
-    });
-
-    
-
-    // =====================================================
-    // CALLEE — decline
-    // =====================================================
-    declineBtn.addEventListener('click', () => {
-      socket.emit('call_declined', {
-        caller_id: currentCall.peerId,
-        call_id: currentCall.callId
-      });
-      endLocalCall();
-    });
-
-    // =====================================================
-    // TEACHER — End Call
-    // =====================================================
-    if (hangupBtn) {
-      hangupBtn.addEventListener('click', () => {
-        clearRingingTimeout();
-        socket.emit('call_ended', {
-          other_id: currentCall.peerId,
-          call_id: currentCall.callId
-        });
-        endLocalCall();
-      });
-    }
-
-    // =====================================================
-    // STUDENT — Leave Call
-    // =====================================================
-    if (leaveBtn) {
-      leaveBtn.addEventListener('click', () => {
-        socket.emit('call_left', {
-          other_id: currentCall.peerId,
-          call_id: currentCall.callId
-        });
-        endLocalCall();
-      });
-    }
-
-    // =====================================================
-    // Teacher receives this when the student leaves
-    // =====================================================
-    socket.on('peer_left', (data) => {
-      console.log('[call] peer left:', data.name);
-      alert(`${data.name} left the call. You can keep chatting or end the call.`);
-      if (pc) {
-        try { pc.close(); } catch (e) {}
-        pc = null;
-      }
-      // Keep panel visible — teacher can End Call whenever ready
-    });
-
-
-        // =====================================================
-    // GROUP CALL STATE
+    // Group call state
     // =====================================================
     const groupCall = {
       active: false,
@@ -903,11 +612,19 @@ const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
       teacherId: null,
       teacherName: null,
       callId: null,
-      peers: new Map(),   // peerId -> { pc, audioEl }
+      peers: new Map(),    // peerId -> { pc, audioEl, name }
       muted: false,
     };
+    let isMicMuted = false;
 
-    function groupCallPanelShow(label) {
+    function updateMuteBtn() {
+      if (!muteBtn) return;
+      muteBtn.textContent = isMicMuted ? '🔇 Unmute My Mic' : '🎤 Mute My Mic';
+      muteBtn.style.background = isMicMuted ? '#e04a4a' : '';
+      muteBtn.style.color = isMicMuted ? '#fff' : '';
+    }
+
+    function showGroupCallPanel(label) {
       if (!callPanel) return;
       document.getElementById('activeName').textContent = label;
       document.getElementById('callTimer').textContent = 'Group Call';
@@ -916,44 +633,55 @@ const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
       window.__inCall = true;
     }
 
-    function groupCallPanelHide() {
+    function hideGroupCallPanel() {
       if (!callPanel) return;
       callPanel.style.display = 'none';
       document.body.classList.remove('in-call');
       window.__inCall = false;
     }
 
-    async function createGroupPeer(peerId, peerName, isTeacherSide) {
-      // Reuse localStream (the teacher already got mic via getMic(), and student gets it too)
+    // =====================================================
+    // Create a peer connection to another participant
+    // =====================================================
+    async function createGroupPeer(peerId, peerName, sendOffer) {
       if (!localStream) await getMic();
 
       const pc = new RTCPeerConnection(RTC_CONFIG);
       localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
 
-      // Separate audio element per remote peer
       const audioEl = document.createElement('audio');
       audioEl.autoplay = true;
+      audioEl.setAttribute('playsinline', '');
+      audioEl.setAttribute('webkit-playsinline', '');
       audioEl.dataset.peerId = peerId;
       document.body.appendChild(audioEl);
 
-      pc.ontrack = (e) => { audioEl.srcObject = e.streams[0]; };
-
-      pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          socket.emit('group_webrtc_ice', {
-            to_id: peerId,
-            candidate: e.candidate,
+      pc.ontrack = (e) => {
+        audioEl.srcObject = e.streams[0];
+        const p = audioEl.play();
+        if (p && p.catch) {
+          p.catch((err) => {
+            console.warn('[audio] play() rejected:', err);
+            const retry = () => audioEl.play().catch(() => {});
+            document.addEventListener('touchend', retry, { once: true });
+            document.addEventListener('click', retry, { once: true });
           });
         }
       };
 
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          socket.emit('group_webrtc_ice', { to_id: peerId, candidate: e.candidate });
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log('[webrtc] peer', peerId, 'state =', pc.connectionState);
+      };
+
       groupCall.peers.set(peerId, { pc, audioEl, name: peerName });
 
-      // If this is the teacher initiating to a student, create the offer.
-      // If this is the student connecting to the teacher, we still create the offer —
-      // whoever starts a peer sends the offer. Simplest rule: the side that
-      // triggers createGroupPeer sends the offer.
-      if (isTeacherSide) {
+      if (sendOffer) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         socket.emit('group_webrtc_offer', { to_id: peerId, sdp: offer });
@@ -972,131 +700,60 @@ const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
       groupCall.peers.delete(peerId);
     }
 
-    function endGroupCallLocal() {
+    async function endGroupCallLocal() {
       for (const peerId of Array.from(groupCall.peers.keys())) {
         closeGroupPeer(peerId);
       }
       groupCall.active = false;
       groupCall.teacherId = null;
       groupCall.callId = null;
-      groupCallPanelHide();
+      await stopLocalStream();
+      hideGroupCallPanel();
+      isMicMuted = false;
+      updateMuteBtn();
     }
 
-    // ---------- Teacher: start the group call ----------
-    if (callPickerBtn) {
-      // Override the old picker: instead of picking a single student, start a group call
-      callPickerBtn.textContent = '📞 Start Group Call';
+    // =====================================================
+    // Teacher: start the group call
+    // =====================================================
+    if (callPickerBtn && IS_TEACHER) {
       callPickerBtn.onclick = async () => {
         try {
+          if (groupCall.active) {
+            alert('You already have a call in progress.');
+            return;
+          }
           await getMic();
           groupCall.active = true;
           groupCall.teacherId = MY_ID;
           groupCall.teacherName = MY_NAME;
-          groupCallPanelShow('Starting group call…');
+          showGroupCallPanel('Starting group call…');
           socket.emit('group_call_start', { conversation_id: CONVO_ID });
         } catch (err) {
           console.error('[group-call] mic failed:', err);
           alert('Could not access microphone. ' + err.message);
+          groupCall.active = false;
+          hideGroupCallPanel();
         }
       };
     }
 
-    // ---------- Server → client events ----------
+    // =====================================================
+    // Mute button
+    // =====================================================
+    if (muteBtn) {
+      muteBtn.onclick = () => {
+        if (!localStream) return;
+        isMicMuted = !isMicMuted;
+        groupCall.muted = isMicMuted;
+        localStream.getAudioTracks().forEach(t => t.enabled = !isMicMuted);
+        updateMuteBtn();
+      };
+    }
 
-    // Teacher receives this right after starting the call
-    socket.on('group_call_started', (data) => {
-      if (Number(data.conversation_id) !== CONVO_ID) return;
-      groupCall.callId = data.call_id;
-      groupCallPanelShow(`${data.teacher_name} · Group Call`);
-    });
-
-    // Student receives this to ring them
-    socket.on('group_call_ringing', (data) => {
-      if (Number(data.conversation_id) !== CONVO_ID) return;
-      if (current_user_role_is_teacher()) return; // teacher ignores self-ring
-
-      groupCall.teacherId = Number(data.teacher_id);
-      groupCall.teacherName = data.teacher_name;
-      groupCall.callId = data.call_id;
-
-      // Show the incoming-call modal
-      const callerNameEl = document.getElementById('callerName');
-      if (callerNameEl) callerNameEl.textContent = `${data.teacher_name} is starting a group call`;
-      if (incomingModal) incomingModal.style.display = 'flex';
-    });
-
-    // Student accepted — set up a peer with the teacher
-    socket.on('group_call_joined', async (data) => {
-      if (Number(data.conversation_id) !== CONVO_ID) return;
-      groupCall.active = true;
-      groupCall.teacherId = Number(data.teacher_id);
-      groupCall.callId = data.call_id;
-      groupCallPanelShow(`${data.teacher_name} · Group Call`);
-
-      // Create a peer to the teacher — student sends the offer
-      await createGroupPeer(Number(data.teacher_id), data.teacher_name, true);
-    });
-
-    // Teacher receives this when a student joins
-    socket.on('group_call_participant_joined', async (data) => {
-      if (Number(data.conversation_id) !== CONVO_ID) return;
-      if (!groupCall.active) return;
-
-      // The student already sent us an offer via group_webrtc_offer,
-      // so we just register them for cleanup. Peer gets created on offer receipt.
-      const panel = document.getElementById('activeName');
-      if (panel) panel.textContent = `${groupCall.teacherName} · ${groupCall.peers.size + 1} on call`;
-    });
-
-    // Participant left
-    socket.on('group_call_participant_left', (data) => {
-      if (Number(data.conversation_id) !== CONVO_ID) return;
-      closeGroupPeer(Number(data.user_id));
-      const panel = document.getElementById('activeName');
-      if (panel) panel.textContent =
-        `${groupCall.teacherName} · ${groupCall.peers.size} on call`;
-    });
-
-    // Call ended (by teacher or disconnect)
-    socket.on('group_call_ended', (data) => {
-      if (Number(data.conversation_id) !== CONVO_ID) return;
-      endGroupCallLocal();
-      alert('Group call ended.');
-    });
-
-    // Student's own leave confirmed
-    socket.on('group_call_left', () => {
-      endGroupCallLocal();
-    });
-
-    // ---------- WebRTC signaling relay ----------
-    socket.on('group_webrtc_offer', async (data) => {
-      // We're receiving an offer from `data.from_id`.
-      // If we don't have a peer for them yet, create one (without creating our own offer).
-      if (!groupCall.peers.has(Number(data.from_id))) {
-        await createGroupPeer(Number(data.from_id), data.from_id, false);
-      }
-      const entry = groupCall.peers.get(Number(data.from_id));
-      await entry.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-      const answer = await entry.pc.createAnswer();
-      await entry.pc.setLocalDescription(answer);
-      socket.emit('group_webrtc_answer', { to_id: data.from_id, sdp: answer });
-    });
-
-    socket.on('group_webrtc_answer', async (data) => {
-      const entry = groupCall.peers.get(Number(data.from_id));
-      if (!entry) return;
-      await entry.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-    });
-
-    socket.on('group_webrtc_ice', async (data) => {
-      const entry = groupCall.peers.get(Number(data.from_id));
-      if (!entry) return;
-      try { await entry.pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
-      catch (e) { console.warn('ICE error', e); }
-    });
-
-    // ---------- Accept / Decline / Leave / End for group call ----------
+    // =====================================================
+    // Accept / Decline / Leave / End
+    // =====================================================
     if (acceptBtn) {
       acceptBtn.onclick = async () => {
         try {
@@ -1106,7 +763,7 @@ const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
         } catch (err) {
           console.error('[group-accept] failed:', err);
           alert('Mic denied.');
-          socket.emit('call_declined', { caller_id: groupCall.teacherId, call_id: groupCall.callId });
+          incomingModal.style.display = 'none';
           endGroupCallLocal();
         }
       };
@@ -1120,138 +777,127 @@ const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
     }
 
     if (leaveBtn) {
-      leaveBtn.onclick = () => {
+      leaveBtn.onclick = async () => {
         socket.emit('group_call_leave', { conversation_id: CONVO_ID });
-        endGroupCallLocal();
+        await endGroupCallLocal();
       };
     }
 
     if (hangupBtn) {
-      hangupBtn.onclick = () => {
+      hangupBtn.onclick = async () => {
         socket.emit('group_call_end', { conversation_id: CONVO_ID });
-        endGroupCallLocal();
+        await endGroupCallLocal();
       };
-    }
-
-    // ---------- Mute button reuses existing logic but exposes groupCall.muted ----------
-    if (muteBtn) {
-      muteBtn.onclick = () => {
-        if (!localStream) return;
-        groupCall.muted = !groupCall.muted;
-        isMicMuted = groupCall.muted;
-        localStream.getAudioTracks().forEach(t => t.enabled = !isMicMuted);
-        updateMuteBtn();
-      };
-    }
-
-    // Helper
-    function current_user_role_is_teacher() {
-      return MY_ROLE === 'teacher' || MY_ROLE === 'admin';
     }
 
     // =====================================================
-    // SIGNALING
+    // Server → Client group call events
     // =====================================================
-    function showIncomingModal(data) {
-      currentCall = {
-        peerId: Number(data.from_id),
-        callId: Number(data.call_id),
-        isCaller: false,
-        peerName: data.from_name
-      };
-      document.getElementById('callerName').textContent = data.from_name;
-      incomingModal.style.display = 'flex';
-    }
 
-    socket.on('incoming_call', showIncomingModal);
-    window.addEventListener('call_pending', (e) => showIncomingModal(e.detail));
+    // Teacher confirms call started
+    socket.on('group_call_started', (data) => {
+      if (Number(data.conversation_id) !== CONVO_ID) return;
+      groupCall.callId = data.call_id;
+      showGroupCallPanel(`${data.teacher_name} · Group Call`);
+    });
 
-    socket.on('call_accepted', async () => {
-      clearRingingTimeout();
-      showCallPanel(currentCall.peerName || 'On Call');
+    // Student receives the ring
+    socket.on('group_call_ringing', (data) => {
+      if (Number(data.conversation_id) !== CONVO_ID) return;
+      if (IS_TEACHER) return;
+
+      groupCall.teacherId = Number(data.teacher_id);
+      groupCall.teacherName = data.teacher_name;
+      groupCall.callId = data.call_id;
+
+      const callerNameEl = document.getElementById('callerName');
+      if (callerNameEl) {
+        callerNameEl.textContent = `${data.teacher_name} is starting a group call`;
+      }
+      if (incomingModal) incomingModal.style.display = 'flex';
+    });
+
+    // Student's own join confirmed — create a peer to the teacher
+    socket.on('group_call_joined', async (data) => {
+      if (Number(data.conversation_id) !== CONVO_ID) return;
+      groupCall.active = true;
+      groupCall.teacherId = Number(data.teacher_id);
+      groupCall.callId = data.call_id;
+      showGroupCallPanel(`${data.teacher_name} · Group Call`);
+      await createGroupPeer(Number(data.teacher_id), data.teacher_name, true);
+    });
+
+    // Teacher is notified a student joined
+    socket.on('group_call_participant_joined', (data) => {
+      if (Number(data.conversation_id) !== CONVO_ID) return;
+      if (!groupCall.active) return;
+      const panel = document.getElementById('activeName');
+      if (panel) panel.textContent =
+        `${groupCall.teacherName} · ${groupCall.peers.size + 1} on call`;
+    });
+
+    // A participant left (or disconnected)
+    socket.on('group_call_participant_left', (data) => {
+      if (Number(data.conversation_id) !== CONVO_ID) return;
+      closeGroupPeer(Number(data.user_id));
+      const panel = document.getElementById('activeName');
+      if (panel) panel.textContent =
+        `${groupCall.teacherName} · ${groupCall.peers.size} on call`;
+    });
+
+    // Call fully ended (teacher ended or disconnect cleanup)
+    socket.on('group_call_ended', async () => {
+      await endGroupCallLocal();
+      alert('Group call ended.');
+    });
+
+    // Student's own leave confirmed by server
+    socket.on('group_call_left', async () => {
+      await endGroupCallLocal();
+    });
+
+    // =====================================================
+    // WebRTC signaling relay
+    // =====================================================
+    socket.on('group_webrtc_offer', async (data) => {
+      const peerId = Number(data.from_id);
+      if (!groupCall.peers.has(peerId)) {
+        await createGroupPeer(peerId, peerId, false);
+      }
+      const entry = groupCall.peers.get(peerId);
       try {
-        createPeer();
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        socket.emit('webrtc_offer', { to_id: currentCall.peerId, sdp: offer });
+        await entry.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        const answer = await entry.pc.createAnswer();
+        await entry.pc.setLocalDescription(answer);
+        socket.emit('group_webrtc_answer', { to_id: peerId, sdp: answer });
       } catch (err) {
-        console.error('[call_accepted] failed:', err);
-        endLocalCall();
+        console.error('[group_webrtc_offer] failed:', err);
       }
     });
 
-    socket.on('call_declined', () => {
-      clearRingingTimeout();
-      alert('Call declined.');
-      endLocalCall();
-    });
-
-    socket.on('call_ended', () => {
-      clearRingingTimeout();
-      endLocalCall();
-    });
-
-    socket.on('call_failed', (d) => {
-      clearRingingTimeout();
-      alert(d.reason || 'Call failed');
-      endLocalCall();
-    });
-
-    socket.on('webrtc_offer', async (data) => {
-      if (!pc) createPeer();
+    socket.on('group_webrtc_answer', async (data) => {
+      const entry = groupCall.peers.get(Number(data.from_id));
+      if (!entry) return;
       try {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit('webrtc_answer', { to_id: data.from_id, sdp: answer });
+        await entry.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
       } catch (err) {
-        console.error('[webrtc_offer] failed:', err);
-        endLocalCall();
+        console.error('[group_webrtc_answer] failed:', err);
       }
     });
 
-    socket.on('webrtc_answer', async (data) => {
+    socket.on('group_webrtc_ice', async (data) => {
+      const entry = groupCall.peers.get(Number(data.from_id));
+      if (!entry) return;
       try {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-      } catch (err) {
-        console.error('[webrtc_answer] failed:', err);
+        await entry.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+      } catch (e) {
+        console.warn('ICE error', e);
       }
     });
 
-    socket.on('webrtc_ice', async (data) => {
-      if (pc && data.candidate) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-        } catch (e) {
-          console.warn('ICE error', e);
-        }
-      }
-    });
-
-    socket.on('chat_cleared', (data) => {
-  if (Number(data.conversation_id) !== CONVO_ID) return;
-  const box = document.getElementById('messages');
-  if (box) box.innerHTML = '';
-  // Reset dedupe set so re-fetching works if needed
-  if (window.__chat && window.__chat.renderedIds) {
-    window.__chat.renderedIds.clear();
-  }
-  // Show a subtle system note
-  const note = document.createElement('div');
-  note.style.cssText =
-    'text-align:center;font-size:12px;color:#888;margin:20px 0;font-style:italic;';
-  note.textContent = `Chat cleared by ${data.cleared_by}`;
-  box.appendChild(note);
-});
-
-socket.on('message_deleted', (data) => {
-  if (Number(data.conversation_id) !== CONVO_ID) return;
-  const el = document.querySelector(`[data-message-id="${data.message_id}"]`);
-  if (el && el.parentNode) el.parentNode.removeChild(el);
-  if (renderedIds) renderedIds.delete(Number(data.message_id));
-});
-
-    // ---------- User-interaction flag (for auto-refresh) ----------
+    // =====================================================
+    // User-interaction flag (for auto-refresh poller)
+    // =====================================================
     let interactionTimer = null;
     ['input', 'keydown'].forEach(evt => {
       document.addEventListener(evt, () => {
@@ -1266,7 +912,6 @@ socket.on('message_deleted', (data) => {
     return true;
   }
 
-  // Attach now, else wait for socket
   if (!attach()) {
     if (typeof window.onSocketReady === 'function') {
       window.onSocketReady(attach);
