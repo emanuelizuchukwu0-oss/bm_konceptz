@@ -1,30 +1,34 @@
 {% extends "base.html" %}
 {% block content %}
 
-{% set other = convo.teacher if current_user.user_id == convo.student_id else convo.student %}
-
 <!-- ===================================================== -->
-<!-- HEADER                                                -->
+<!-- HEADER — group info (works for group + 1-to-1)        -->
 <!-- ===================================================== -->
 <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
   <div>
-    <strong>
-      {{ other.display_name or
-         (other.profile.full_name if other.profile else other.email) }}
-    </strong>
-    <div style="font-size:12px;color:#888;margin-top:2px;">
-      <span class="badge badge-{{ 'active' if other.role == 'teacher' else 'pending' }}"
-            style="font-size:10px;">
-        {{ other.role|upper }}
-      </span>
-    </div>
+    {% if convo.is_group %}
+      <strong>💬 {{ convo.name or 'General Chat' }}</strong>
+      <div style="font-size:12px;color:#888;margin-top:2px;">
+        Everyone in the academy
+      </div>
+    {% else %}
+      {% set other = convo.teacher if current_user.user_id == convo.student_id else convo.student %}
+      <strong>
+        {{ other.display_name or
+           (other.profile.full_name if other.profile else other.email) }}
+      </strong>
+      <div style="font-size:12px;color:#888;margin-top:2px;">
+        <span class="badge badge-{{ 'active' if other.role == 'teacher' else 'pending' }}"
+              style="font-size:10px;">
+          {{ other.role|upper }}
+        </span>
+      </div>
+    {% endif %}
   </div>
 
   {% if current_user.role in ('teacher', 'admin') %}
-    <button type="button" class="btn" id="callBtn"
-            data-user-id="{{ other.user_id }}"
-            data-user-name="{{ other.display_name or other.email }}">
-      📞 Call
+    <button type="button" class="btn" id="callPickerBtn">
+      📞 Call a Student
     </button>
   {% endif %}
 </div>
@@ -38,7 +42,7 @@
   <div id="callPanel"
        style="display:none;flex:0 0 300px;position:sticky;top:80px;">
     <div class="card" style="text-align:center;">
-      <h2 style="margin-bottom:12px;">📞 Live Class</h2>
+      <h2 style="margin-bottom:12px;">📞 Live Call</h2>
       <div style="margin:14px 0;color:#f0b429;font-weight:600;" id="activeName">—</div>
       <div id="callTimer" style="font-size:32px;font-weight:700;margin:10px 0;">00:00</div>
       <div style="font-size:12px;color:#888;margin-bottom:16px;">
@@ -111,7 +115,26 @@
   </div>
 </div>
 
-<!-- INCOMING CALL MODAL -->
+<!-- ===================================================== -->
+<!-- CALL PICKER MODAL — teachers choose who to call       -->
+<!-- ===================================================== -->
+<div id="callPicker"
+     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);
+            z-index:100;align-items:center;justify-content:center;">
+  <div class="card" style="max-width:420px;width:90%;">
+    <h2 style="margin-bottom:12px;">📞 Choose a student to call</h2>
+    <div id="callPickerList"
+         style="max-height:400px;overflow-y:auto;font-size:14px;">
+      <em style="color:#888;">Loading…</em>
+    </div>
+    <button type="button" class="btn btn-secondary" id="callPickerClose"
+            style="width:100%;margin-top:14px;">Cancel</button>
+  </div>
+</div>
+
+<!-- ===================================================== -->
+<!-- INCOMING CALL MODAL                                   -->
+<!-- ===================================================== -->
 <div id="incomingCall"
      style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);
             z-index:100;align-items:center;justify-content:center;">
@@ -139,7 +162,7 @@
 
 <script>
 // =====================================================
-// PHASE 1 — Runs IMMEDIATELY, no socket required
+// PHASE 1 — HTTP + DOM (no socket required)
 // =====================================================
 (function () {
   const CONVO_ID = Number({{ convo.conversation_id | tojson }});
@@ -153,27 +176,24 @@
   const fileName  = document.getElementById('fileName');
   const messages  = document.getElementById('messages');
 
-  // ---------- Dedupe ----------
+  // Message dedupe
   const renderedIds = new Set();
 
-  // ---------- File input label ----------
+  // File input label
   fileInput.addEventListener('change', () => {
     fileName.textContent = fileInput.files.length
       ? 'Selected: ' + fileInput.files[0].name
       : '';
   });
 
-  // ---------- Auto-scroll ----------
   function scrollBottom() { messages.scrollTop = messages.scrollHeight; }
   setTimeout(scrollBottom, 0);
 
-  // ---------- Role badge ----------
   function roleBadge(role) {
     const cls = role === 'teacher' ? 'badge-active' : 'badge-pending';
     return `<span class="badge ${cls}" style="font-size:9px;padding:2px 6px;">${role.toUpperCase()}</span>`;
   }
 
-  // ---------- Render one message ----------
   function renderMessage(m) {
     if (m.message_id && renderedIds.has(m.message_id)) return;
     if (m.message_id) renderedIds.add(m.message_id);
@@ -227,7 +247,6 @@
     scrollBottom();
   }
 
-  // ---------- Send message (HTTP — always works) ----------
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const body = input.value.trim();
@@ -243,16 +262,13 @@
         method: 'POST',
         body: fd,
       });
-
       if (!res.ok) {
-        const t = await res.text();
-        alert('Send failed: ' + t.slice(0, 120));
+        alert('Send failed: ' + (await res.text()).slice(0, 120));
         return;
       }
-
       const data = await res.json();
 
-      // ✅ Optimistically render own message
+      // Optimistic render of own message
       renderMessage({
         message_id: data.payload.message_id,
         sender_id: MY_ID,
@@ -273,7 +289,6 @@
     }
   });
 
-  // ---------- Expose for Phase 2 ----------
   window.__chat = { CONVO_ID, MY_ID, MY_NAME, renderMessage };
 })();
 
@@ -294,7 +309,7 @@
     });
 
     // =====================================================
-    // WebRTC — proper caller/callee separation
+    // WebRTC state
     // =====================================================
     let pc = null;
     let localStream = null;
@@ -302,13 +317,16 @@
     let timerInterval = null;
     let ringingTimeout = null;
 
-    const callBtn       = document.getElementById('callBtn');
     const callPanel     = document.getElementById('callPanel');
     const incomingModal = document.getElementById('incomingCall');
     const acceptBtn     = document.getElementById('acceptBtn');
     const declineBtn    = document.getElementById('declineBtn');
     const hangupBtn     = document.getElementById('hangupBtn');
     const remoteAudio   = document.getElementById('remoteAudio');
+    const callPicker    = document.getElementById('callPicker');
+    const callPickerList= document.getElementById('callPickerList');
+    const callPickerBtn = document.getElementById('callPickerBtn');
+    const callPickerClose = document.getElementById('callPickerClose');
 
     const RTC_CONFIG = {
       iceServers: [
@@ -317,7 +335,6 @@
       ]
     };
 
-    // ---------- Helpers ----------
     async function getMic() {
       if (!localStream) {
         localStream = await navigator.mediaDevices.getUserMedia({
@@ -334,8 +351,7 @@
       pc.onicecandidate = (e) => {
         if (e.candidate) {
           socket.emit('webrtc_ice', {
-            to_id: currentCall.peerId,
-            candidate: e.candidate
+            to_id: currentCall.peerId, candidate: e.candidate
           });
         }
       };
@@ -353,7 +369,7 @@
       }, 1000);
     }
 
-    function showRinging(name) {
+    function showRinging() {
       document.getElementById('activeName').textContent = 'Calling…';
       document.getElementById('callTimer').textContent = 'Ringing';
       callPanel.style.display = 'block';
@@ -394,44 +410,68 @@
       window.__inCall = false;
     }
 
-    // =====================================================
-    // CALLER
-    // =====================================================
-    if (callBtn) {
-      callBtn.addEventListener('click', async () => {
-        callBtn.disabled = true;
-        try {
-          const peerId = Number(callBtn.dataset.userId);
-          const peerName = callBtn.dataset.userName;
-
-          await getMic();
-
-          currentCall = { peerId, callId: null, isCaller: true, peerName };
-
-          showRinging(peerName);
-          socket.emit('call_user', { callee_id: peerId });
-
-          // 30-second ring timeout
-          ringingTimeout = setTimeout(() => {
-            alert('No answer. Call ended.');
-            socket.emit('call_ended', { other_id: peerId, call_id: null });
-            endLocalCall();
-          }, 30000);
-        } catch (err) {
-          console.error('[call] failed:', err);
-          let msg = 'Could not start call.';
-          if (err.name === 'NotAllowedError') {
-            msg = 'Microphone access was blocked. Allow it and reload.';
-          } else if (err.name === 'NotFoundError') {
-            msg = 'No microphone found on this device.';
-          } else if (!socket.connected) {
-            msg = 'Not connected to the server. Please try again.';
-          }
-          alert(msg);
+    async function initiateCall(peerId, peerName) {
+      try {
+        await getMic();
+        currentCall = { peerId, callId: null, isCaller: true, peerName };
+        showRinging();
+        socket.emit('call_user', { callee_id: peerId });
+        ringingTimeout = setTimeout(() => {
+          alert('No answer. Call ended.');
+          socket.emit('call_ended', { other_id: peerId, call_id: null });
           endLocalCall();
-        } finally {
-          callBtn.disabled = false;
+        }, 30000);
+      } catch (err) {
+        console.error('[call] failed:', err);
+        let msg = 'Could not start call.';
+        if (err.name === 'NotAllowedError') {
+          msg = 'Microphone access was blocked. Allow it and reload.';
+        } else if (err.name === 'NotFoundError') {
+          msg = 'No microphone found on this device.';
+        } else if (!socket.connected) {
+          msg = 'Not connected to the server. Please try again.';
         }
+        alert(msg);
+        endLocalCall();
+      }
+    }
+
+    // =====================================================
+    // CALL PICKER (teachers/admins only)
+    // =====================================================
+    function openCallPicker() {
+      callPicker.style.display = 'flex';
+      const users = (window.__onlineUsers || []).filter(u =>
+        u.role === 'student' && u.user_id !== MY_ID
+      );
+
+      if (!users.length) {
+        callPickerList.innerHTML =
+          '<em style="color:#888;">No students online right now.</em>';
+        return;
+      }
+
+      callPickerList.innerHTML = '';
+      users.forEach(u => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'btn btn-secondary';
+        row.style.cssText = 'width:100%;margin-bottom:8px;text-align:left;display:block;';
+        row.textContent = `📞 ${u.name}`;
+        row.onclick = () => {
+          callPicker.style.display = 'none';
+          initiateCall(u.user_id, u.name);
+        };
+        callPickerList.appendChild(row);
+      });
+    }
+
+    if (callPickerBtn) {
+      callPickerBtn.addEventListener('click', openCallPicker);
+    }
+    if (callPickerClose) {
+      callPickerClose.addEventListener('click', () => {
+        callPicker.style.display = 'none';
       });
     }
 
@@ -495,10 +535,8 @@
     socket.on('incoming_call', showIncomingModal);
     window.addEventListener('call_pending', (e) => showIncomingModal(e.detail));
 
-    // --- Caller receives this when callee clicks Accept ---
     socket.on('call_accepted', async () => {
       clearRingingTimeout();
-      // NOW switch from "Ringing" to a real call
       showCallPanel(currentCall.peerName || 'On Call');
       try {
         createPeer();
@@ -528,7 +566,6 @@
       endLocalCall();
     });
 
-    // --- Callee receives this when the caller creates the offer ---
     socket.on('webrtc_offer', async (data) => {
       if (!pc) createPeer();
       try {
@@ -575,7 +612,6 @@
     return true;
   }
 
-  // Attach now, or wait for socket
   if (!attach()) {
     if (typeof window.onSocketReady === 'function') {
       window.onSocketReady(attach);
