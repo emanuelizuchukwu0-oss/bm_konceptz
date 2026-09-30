@@ -1095,6 +1095,9 @@ def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 
+
+
+
 # ==================================================================
 # ADMIN
 # ==================================================================
@@ -1333,15 +1336,25 @@ def on_connect(auth=None):
 def on_disconnect():
     if current_user.is_authenticated:
         uid = current_user.user_id
+        online_users.pop(uid, None)
 
-        # Remove only THIS socket's sid
-        sids = online_users.get(uid)
-        if sids:
-            sids.discard(request.sid)
-            if not sids:                # only delete when the last socket closes
-                online_users.pop(uid, None)
+        # If they were in a group call, notify their room
+        for convo_id, info in list(group_calls.items()):
+            if uid == info['teacher_id']:
+                # Teacher disconnected — end the call for everyone
+                socketio.emit('group_call_ended', {
+                    'conversation_id': convo_id,
+                    'ended_by': uid,
+                }, room=f'convo_{convo_id}')
+                group_calls.pop(convo_id, None)
+            else:
+                # Student disconnected — notify the teacher
+                socketio.emit('group_call_participant_left', {
+                    'conversation_id': convo_id,
+                    'user_id': uid,
+                }, room=f"user_{info['teacher_id']}")
 
-        # If this user was in a call, notify the other side
+        # 1-to-1 fallback cleanup (existing)
         for caller_id, info in list(active_calls.items()):
             if info['callee_id'] == uid or caller_id == uid:
                 other = info['callee_id'] if caller_id == uid else caller_id
@@ -1509,6 +1522,162 @@ def webrtc_answer(data):
 def webrtc_ice(data):
     emit('webrtc_ice', {'from_id': current_user.user_id, 'candidate': data['candidate']},
          room=f"user_{data['to_id']}")
+
+
+    # ==================================================================
+# GROUP VOICE CALLS
+# ==================================================================
+group_calls = {}   # conversation_id -> {'teacher_id': X, 'started_at': T, 'call_id': Y}
+
+
+@socketio.on('group_call_start')
+def handle_group_call_start(data):
+    """Teacher starts a group call for a conversation."""
+    if current_user.role not in ('teacher', 'admin'):
+        emit('call_failed', {'reason': 'Only teachers can start calls.'})
+        return
+
+    convo_id = int(data.get('conversation_id') or 0)
+    if not convo_id:
+        emit('call_failed', {'reason': 'No conversation specified.'})
+        return
+
+    convo = db.session.get(Conversation, convo_id)
+    if not convo:
+        emit('call_failed', {'reason': 'Conversation not found.'})
+        return
+
+    # Record the call
+    log = CallLog(caller_id=current_user.user_id, callee_id=None,
+                  status='group-active')
+    db.session.add(log)
+    db.session.commit()
+
+    teacher_name = current_user.display_name or (
+        current_user.profile.full_name if current_user.profile else current_user.email
+    )
+
+    group_calls[convo_id] = {
+        'teacher_id': current_user.user_id,
+        'started_at': time.time(),
+        'call_id': log.call_id,
+        'teacher_name': teacher_name,
+    }
+
+    # Broadcast the ring to the whole conversation room
+    socketio.emit('group_call_ringing', {
+        'conversation_id': convo_id,
+        'call_id': log.call_id,
+        'teacher_id': current_user.user_id,
+        'teacher_name': teacher_name,
+    }, room=f'convo_{convo_id}')
+
+    # Also confirm back to the caller
+    emit('group_call_started', {
+        'conversation_id': convo_id,
+        'call_id': log.call_id,
+        'teacher_name': teacher_name,
+    })
+
+
+@socketio.on('group_call_join')
+def handle_group_call_join(data):
+    """Student accepts the group call. Registers them in the call and notifies the teacher."""
+    convo_id = int(data.get('conversation_id') or 0)
+    call_info = group_calls.get(convo_id)
+    if not call_info:
+        emit('call_failed', {'reason': 'No active group call.'})
+        return
+
+    student_name = current_user.display_name or (
+        current_user.profile.full_name if current_user.profile else current_user.email
+    )
+
+    # Tell the teacher a student joined
+    socketio.emit('group_call_participant_joined', {
+        'conversation_id': convo_id,
+        'user_id': current_user.user_id,
+        'name': student_name,
+        'role': current_user.role,
+    }, room=f'user_{call_info["teacher_id"]}')
+
+    # Tell the student who's already in the call
+    emit('group_call_joined', {
+        'conversation_id': convo_id,
+        'call_id': call_info['call_id'],
+        'teacher_id': call_info['teacher_id'],
+        'teacher_name': call_info['teacher_name'],
+    })
+
+
+@socketio.on('group_call_leave')
+def handle_group_call_leave(data):
+    """Student leaves the group call."""
+    convo_id = int(data.get('conversation_id') or 0)
+    call_info = group_calls.get(convo_id)
+
+    student_name = current_user.display_name or (
+        current_user.profile.full_name if current_user.profile else current_user.email
+    )
+
+    if call_info:
+        socketio.emit('group_call_participant_left', {
+            'conversation_id': convo_id,
+            'user_id': current_user.user_id,
+            'name': student_name,
+        }, room=f'user_{call_info["teacher_id"]}')
+
+    emit('group_call_left', {'conversation_id': convo_id})
+
+
+@socketio.on('group_call_end')
+def handle_group_call_end(data):
+    """Teacher ends the group call for everyone."""
+    if current_user.role not in ('teacher', 'admin'):
+        return
+
+    convo_id = int(data.get('conversation_id') or 0)
+    call_info = group_calls.pop(convo_id, None)
+
+    if call_info:
+        log = db.session.get(CallLog, call_info['call_id'])
+        if log:
+            log.status = 'group-ended'
+            log.ended_at = datetime.utcnow()
+            if log.started_at:
+                log.duration = int((log.ended_at - log.started_at).total_seconds())
+            db.session.commit()
+
+    # Broadcast end to everyone in the room
+    socketio.emit('group_call_ended', {
+        'conversation_id': convo_id,
+        'ended_by': current_user.user_id,
+    }, room=f'convo_{convo_id}')
+
+
+@socketio.on('group_webrtc_offer')
+def handle_group_offer(data):
+    """Relay WebRTC offer between two participants."""
+    emit('group_webrtc_offer', {
+        'from_id': current_user.user_id,
+        'sdp': data['sdp'],
+    }, room=f"user_{data['to_id']}")
+
+
+@socketio.on('group_webrtc_answer')
+def handle_group_answer(data):
+    emit('group_webrtc_answer', {
+        'from_id': current_user.user_id,
+        'sdp': data['sdp'],
+    }, room=f"user_{data['to_id']}")
+
+
+@socketio.on('group_webrtc_ice')
+def handle_group_ice(data):
+    emit('group_webrtc_ice', {
+        'from_id': current_user.user_id,
+        'candidate': data['candidate'],
+    }, room=f"user_{data['to_id']}")
 
 
 # ==================================================================

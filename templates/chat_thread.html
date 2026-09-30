@@ -893,6 +893,262 @@ const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
       // Keep panel visible — teacher can End Call whenever ready
     });
 
+
+        // =====================================================
+    // GROUP CALL STATE
+    // =====================================================
+    const groupCall = {
+      active: false,
+      convoId: CONVO_ID,
+      teacherId: null,
+      teacherName: null,
+      callId: null,
+      peers: new Map(),   // peerId -> { pc, audioEl }
+      muted: false,
+    };
+
+    function groupCallPanelShow(label) {
+      if (!callPanel) return;
+      document.getElementById('activeName').textContent = label;
+      document.getElementById('callTimer').textContent = 'Group Call';
+      callPanel.style.display = 'block';
+      document.body.classList.add('in-call');
+      window.__inCall = true;
+    }
+
+    function groupCallPanelHide() {
+      if (!callPanel) return;
+      callPanel.style.display = 'none';
+      document.body.classList.remove('in-call');
+      window.__inCall = false;
+    }
+
+    async function createGroupPeer(peerId, peerName, isTeacherSide) {
+      // Reuse localStream (the teacher already got mic via getMic(), and student gets it too)
+      if (!localStream) await getMic();
+
+      const pc = new RTCPeerConnection(RTC_CONFIG);
+      localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+
+      // Separate audio element per remote peer
+      const audioEl = document.createElement('audio');
+      audioEl.autoplay = true;
+      audioEl.dataset.peerId = peerId;
+      document.body.appendChild(audioEl);
+
+      pc.ontrack = (e) => { audioEl.srcObject = e.streams[0]; };
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          socket.emit('group_webrtc_ice', {
+            to_id: peerId,
+            candidate: e.candidate,
+          });
+        }
+      };
+
+      groupCall.peers.set(peerId, { pc, audioEl, name: peerName });
+
+      // If this is the teacher initiating to a student, create the offer.
+      // If this is the student connecting to the teacher, we still create the offer —
+      // whoever starts a peer sends the offer. Simplest rule: the side that
+      // triggers createGroupPeer sends the offer.
+      if (isTeacherSide) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('group_webrtc_offer', { to_id: peerId, sdp: offer });
+      }
+
+      return pc;
+    }
+
+    function closeGroupPeer(peerId) {
+      const entry = groupCall.peers.get(peerId);
+      if (!entry) return;
+      try { entry.pc.close(); } catch (e) {}
+      if (entry.audioEl && entry.audioEl.parentNode) {
+        entry.audioEl.parentNode.removeChild(entry.audioEl);
+      }
+      groupCall.peers.delete(peerId);
+    }
+
+    function endGroupCallLocal() {
+      for (const peerId of Array.from(groupCall.peers.keys())) {
+        closeGroupPeer(peerId);
+      }
+      groupCall.active = false;
+      groupCall.teacherId = null;
+      groupCall.callId = null;
+      groupCallPanelHide();
+    }
+
+    // ---------- Teacher: start the group call ----------
+    if (callPickerBtn) {
+      // Override the old picker: instead of picking a single student, start a group call
+      callPickerBtn.textContent = '📞 Start Group Call';
+      callPickerBtn.onclick = async () => {
+        try {
+          await getMic();
+          groupCall.active = true;
+          groupCall.teacherId = MY_ID;
+          groupCall.teacherName = MY_NAME;
+          groupCallPanelShow('Starting group call…');
+          socket.emit('group_call_start', { conversation_id: CONVO_ID });
+        } catch (err) {
+          console.error('[group-call] mic failed:', err);
+          alert('Could not access microphone. ' + err.message);
+        }
+      };
+    }
+
+    // ---------- Server → client events ----------
+
+    // Teacher receives this right after starting the call
+    socket.on('group_call_started', (data) => {
+      if (Number(data.conversation_id) !== CONVO_ID) return;
+      groupCall.callId = data.call_id;
+      groupCallPanelShow(`${data.teacher_name} · Group Call`);
+    });
+
+    // Student receives this to ring them
+    socket.on('group_call_ringing', (data) => {
+      if (Number(data.conversation_id) !== CONVO_ID) return;
+      if (current_user_role_is_teacher()) return; // teacher ignores self-ring
+
+      groupCall.teacherId = Number(data.teacher_id);
+      groupCall.teacherName = data.teacher_name;
+      groupCall.callId = data.call_id;
+
+      // Show the incoming-call modal
+      const callerNameEl = document.getElementById('callerName');
+      if (callerNameEl) callerNameEl.textContent = `${data.teacher_name} is starting a group call`;
+      if (incomingModal) incomingModal.style.display = 'flex';
+    });
+
+    // Student accepted — set up a peer with the teacher
+    socket.on('group_call_joined', async (data) => {
+      if (Number(data.conversation_id) !== CONVO_ID) return;
+      groupCall.active = true;
+      groupCall.teacherId = Number(data.teacher_id);
+      groupCall.callId = data.call_id;
+      groupCallPanelShow(`${data.teacher_name} · Group Call`);
+
+      // Create a peer to the teacher — student sends the offer
+      await createGroupPeer(Number(data.teacher_id), data.teacher_name, true);
+    });
+
+    // Teacher receives this when a student joins
+    socket.on('group_call_participant_joined', async (data) => {
+      if (Number(data.conversation_id) !== CONVO_ID) return;
+      if (!groupCall.active) return;
+
+      // The student already sent us an offer via group_webrtc_offer,
+      // so we just register them for cleanup. Peer gets created on offer receipt.
+      const panel = document.getElementById('activeName');
+      if (panel) panel.textContent = `${groupCall.teacherName} · ${groupCall.peers.size + 1} on call`;
+    });
+
+    // Participant left
+    socket.on('group_call_participant_left', (data) => {
+      if (Number(data.conversation_id) !== CONVO_ID) return;
+      closeGroupPeer(Number(data.user_id));
+      const panel = document.getElementById('activeName');
+      if (panel) panel.textContent =
+        `${groupCall.teacherName} · ${groupCall.peers.size} on call`;
+    });
+
+    // Call ended (by teacher or disconnect)
+    socket.on('group_call_ended', (data) => {
+      if (Number(data.conversation_id) !== CONVO_ID) return;
+      endGroupCallLocal();
+      alert('Group call ended.');
+    });
+
+    // Student's own leave confirmed
+    socket.on('group_call_left', () => {
+      endGroupCallLocal();
+    });
+
+    // ---------- WebRTC signaling relay ----------
+    socket.on('group_webrtc_offer', async (data) => {
+      // We're receiving an offer from `data.from_id`.
+      // If we don't have a peer for them yet, create one (without creating our own offer).
+      if (!groupCall.peers.has(Number(data.from_id))) {
+        await createGroupPeer(Number(data.from_id), data.from_id, false);
+      }
+      const entry = groupCall.peers.get(Number(data.from_id));
+      await entry.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      const answer = await entry.pc.createAnswer();
+      await entry.pc.setLocalDescription(answer);
+      socket.emit('group_webrtc_answer', { to_id: data.from_id, sdp: answer });
+    });
+
+    socket.on('group_webrtc_answer', async (data) => {
+      const entry = groupCall.peers.get(Number(data.from_id));
+      if (!entry) return;
+      await entry.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+    });
+
+    socket.on('group_webrtc_ice', async (data) => {
+      const entry = groupCall.peers.get(Number(data.from_id));
+      if (!entry) return;
+      try { await entry.pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+      catch (e) { console.warn('ICE error', e); }
+    });
+
+    // ---------- Accept / Decline / Leave / End for group call ----------
+    if (acceptBtn) {
+      acceptBtn.onclick = async () => {
+        try {
+          await getMic();
+          incomingModal.style.display = 'none';
+          socket.emit('group_call_join', { conversation_id: CONVO_ID });
+        } catch (err) {
+          console.error('[group-accept] failed:', err);
+          alert('Mic denied.');
+          socket.emit('call_declined', { caller_id: groupCall.teacherId, call_id: groupCall.callId });
+          endGroupCallLocal();
+        }
+      };
+    }
+
+    if (declineBtn) {
+      declineBtn.onclick = () => {
+        incomingModal.style.display = 'none';
+        endGroupCallLocal();
+      };
+    }
+
+    if (leaveBtn) {
+      leaveBtn.onclick = () => {
+        socket.emit('group_call_leave', { conversation_id: CONVO_ID });
+        endGroupCallLocal();
+      };
+    }
+
+    if (hangupBtn) {
+      hangupBtn.onclick = () => {
+        socket.emit('group_call_end', { conversation_id: CONVO_ID });
+        endGroupCallLocal();
+      };
+    }
+
+    // ---------- Mute button reuses existing logic but exposes groupCall.muted ----------
+    if (muteBtn) {
+      muteBtn.onclick = () => {
+        if (!localStream) return;
+        groupCall.muted = !groupCall.muted;
+        isMicMuted = groupCall.muted;
+        localStream.getAudioTracks().forEach(t => t.enabled = !isMicMuted);
+        updateMuteBtn();
+      };
+    }
+
+    // Helper
+    function current_user_role_is_teacher() {
+      return MY_ROLE === 'teacher' || MY_ROLE === 'admin';
+    }
+
     // =====================================================
     // SIGNALING
     // =====================================================
