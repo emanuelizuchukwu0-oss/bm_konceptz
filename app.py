@@ -1227,35 +1227,6 @@ def send_message(conversation_id):
 
     return jsonify({'ok': True, 'message_id': msg.message_id, 'payload': payload})
 
-# =====================================================
-# DELETE CHAT
-# =====================================================
-@app.route('/chat/<int:conversation_id>/clear', methods=['POST'])
-@login_required
-@role_required('teacher', 'admin')
-def clear_chat(conversation_id):
-    """Delete all messages in this conversation. Teachers/admins only."""
-    convo = db.session.get(Conversation, conversation_id) or abort(404)
-
-    # Only allow clearing group chats, or 1-to-1 if participant
-    if not convo.is_group:
-        if current_user.user_id not in (convo.student_id, convo.teacher_id):
-            abort(403)
-
-    count = Message.query.filter_by(conversation_id=conversation_id).count()
-    Message.query.filter_by(conversation_id=conversation_id).delete()
-    convo.last_message_at = datetime.utcnow()
-    db.session.commit()
-
-    # Notify everyone connected
-    socketio.emit('chat_cleared', {
-        'conversation_id': conversation_id,
-        'cleared_by': current_user.display_name or current_user.email,
-        'count': count,
-    })
-
-    flash(f'Cleared {count} messages.', 'success')
-    return redirect(url_for('chat_thread', conversation_id=conversation_id))
 
 @app.route('/message/<int:message_id>/delete', methods=['POST'])
 @login_required
