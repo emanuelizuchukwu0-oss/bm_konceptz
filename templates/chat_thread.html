@@ -677,40 +677,27 @@ const { CONVO_ID, MY_ID, MY_NAME, renderMessage, renderedIds } = window.__chat;
     }
 
     // ---------- Panel visibility ----------
-     function showRinging() {
+    function showRinging() {
       document.getElementById('activeName').textContent = 'Calling…';
       document.getElementById('callTimer').textContent = 'Ringing';
       callPanel.style.display = 'block';
-      document.body.classList.add('in-call');   // 👈 ADD
+      document.body.classList.add('in-call');
       window.__inCall = true;
     }
 
     function showCallPanel(name) {
       document.getElementById('activeName').textContent = name || 'On Call';
       callPanel.style.display = 'block';
-      document.body.classList.add('in-call');   // 👈 ADD
+      document.body.classList.add('in-call');
       startTimer();
       window.__inCall = true;
     }
 
     function hideCallPanel() {
       callPanel.style.display = 'none';
-      document.body.classList.remove('in-call'); // 👈 ADD
+      document.body.classList.remove('in-call');
       const t = document.getElementById('callTimer');
       if (t) t.textContent = '00:00';
-    }
-    }
-
-    function showCallPanel(name) {
-      document.getElementById('activeName').textContent = name || 'On Call';
-      callPanel.style.display = 'block';
-      startTimer();
-      window.__inCall = true;
-    }
-
-    function hideCallPanel() {
-      callPanel.style.display = 'none';
-      document.getElementById('callTimer').textContent = '00:00';
     }
 
     function clearRingingTimeout() {
