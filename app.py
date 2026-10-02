@@ -1338,23 +1338,26 @@ def on_disconnect():
         uid = current_user.user_id
         online_users.pop(uid, None)
 
-        # If they were in a group call, notify their room
+        # If they were in a group call, remove and notify
         for convo_id, info in list(group_calls.items()):
+            if uid in info.get('participants', {}):
+                info['participants'].pop(uid, None)
+                for other_id in list(info['participants'].keys()):
+                    socketio.emit('group_call_participant_left', {
+                        'conversation_id': convo_id,
+                        'user_id': uid,
+                        'participants': _participants_payload(convo_id),
+                    }, room=f'user_{other_id}')
+
             if uid == info['teacher_id']:
-                # Teacher disconnected — end the call for everyone
+                # Teacher disconnected — end the whole call
                 socketio.emit('group_call_ended', {
                     'conversation_id': convo_id,
                     'ended_by': uid,
                 }, room=f'convo_{convo_id}')
                 group_calls.pop(convo_id, None)
-            else:
-                # Student disconnected — notify the teacher
-                socketio.emit('group_call_participant_left', {
-                    'conversation_id': convo_id,
-                    'user_id': uid,
-                }, room=f"user_{info['teacher_id']}")
 
-        # 1-to-1 fallback cleanup (existing)
+        # Legacy 1-to-1 cleanup (keep as-is)
         for caller_id, info in list(active_calls.items()):
             if info['callee_id'] == uid or caller_id == uid:
                 other = info['callee_id'] if caller_id == uid else caller_id
@@ -1523,33 +1526,50 @@ def webrtc_ice(data):
     emit('webrtc_ice', {'from_id': current_user.user_id, 'candidate': data['candidate']},
          room=f"user_{data['to_id']}")
 
+@socketio.on('group_list_participants')
+def handle_list_participants(data):
+    """Return the list of user_ids currently on the group call (besides the caller)."""
+    convo_id = int(data.get('conversation_id') or 0)
+    call_info = group_calls.get(convo_id)
+    if not call_info:
+        emit('group_participants', {'conversation_id': convo_id, 'user_ids': []})
+        return
 
-    # ==================================================================
+    # Everyone in this room who is currently online
+    participants = list(online_users.keys())
+
+    emit('group_participants', {
+        'conversation_id': convo_id,
+        'user_ids': [uid for uid in participants if uid != current_user.user_id],
+    })
+
+
+# ==================================================================
 # GROUP VOICE CALLS
 # ==================================================================
-group_calls = {}   # conversation_id -> {'teacher_id': X, 'started_at': T, 'call_id': Y}
+group_calls = {}   # convo_id -> {
+                   #     'teacher_id': X,
+                   #     'started_at': T,
+                   #     'call_id': Y,
+                   #     'teacher_name': N,
+                   #     'participants': {user_id: name, ...},
+                   #     'invited': set()   # who we've already rung
+                   # }
 
 
 @socketio.on('group_call_start')
 def handle_group_call_start(data):
-    """Teacher starts a group call for a conversation."""
     if current_user.role not in ('teacher', 'admin'):
         emit('call_failed', {'reason': 'Only teachers can start calls.'})
         return
 
     convo_id = int(data.get('conversation_id') or 0)
-    if not convo_id:
-        emit('call_failed', {'reason': 'No conversation specified.'})
-        return
-
     convo = db.session.get(Conversation, convo_id)
     if not convo:
         emit('call_failed', {'reason': 'Conversation not found.'})
         return
 
-    # Record the call
-    log = CallLog(caller_id=current_user.user_id, callee_id=None,
-                  status='group-active')
+    log = CallLog(caller_id=current_user.user_id, callee_id=None, status='group-active')
     db.session.add(log)
     db.session.commit()
 
@@ -1562,9 +1582,11 @@ def handle_group_call_start(data):
         'started_at': time.time(),
         'call_id': log.call_id,
         'teacher_name': teacher_name,
+        'participants': {current_user.user_id: teacher_name},   # teacher is participant #1
+        'invited': set(),
     }
 
-    # Broadcast the ring to the whole conversation room
+    # Ring EVERYONE except the teacher
     socketio.emit('group_call_ringing', {
         'conversation_id': convo_id,
         'call_id': log.call_id,
@@ -1572,67 +1594,88 @@ def handle_group_call_start(data):
         'teacher_name': teacher_name,
     }, room=f'convo_{convo_id}')
 
-    # Also confirm back to the caller
+    # Confirm back to teacher with initial participant list
     emit('group_call_started', {
         'conversation_id': convo_id,
         'call_id': log.call_id,
         'teacher_name': teacher_name,
+        'participants': _participants_payload(convo_id),
     })
+
+
+def _participants_payload(convo_id):
+    info = group_calls.get(convo_id)
+    if not info:
+        return []
+    return [
+        {'user_id': uid, 'name': name}
+        for uid, name in info.get('participants', {}).items()
+    ]
 
 
 @socketio.on('group_call_join')
 def handle_group_call_join(data):
-    """Student accepts the group call. Registers them in the call and notifies the teacher."""
+    """Student accepts, or a teacher rejoins — both flow through here."""
     convo_id = int(data.get('conversation_id') or 0)
     call_info = group_calls.get(convo_id)
     if not call_info:
         emit('call_failed', {'reason': 'No active group call.'})
         return
 
-    student_name = current_user.display_name or (
+    uid = current_user.user_id
+    name = current_user.display_name or (
         current_user.profile.full_name if current_user.profile else current_user.email
     )
 
-    # Tell the teacher a student joined
-    socketio.emit('group_call_participant_joined', {
-        'conversation_id': convo_id,
-        'user_id': current_user.user_id,
-        'name': student_name,
-        'role': current_user.role,
-    }, room=f'user_{call_info["teacher_id"]}')
+    call_info.setdefault('participants', {})[uid] = name
 
-    # Tell the student who's already in the call
+    # Send the joiner the current list
     emit('group_call_joined', {
         'conversation_id': convo_id,
         'call_id': call_info['call_id'],
         'teacher_id': call_info['teacher_id'],
         'teacher_name': call_info['teacher_name'],
+        'participants': _participants_payload(convo_id),
     })
+
+    # Notify everyone else that a new participant joined
+    for other_id in list(call_info['participants'].keys()):
+        if other_id == uid:
+            continue
+        socketio.emit('group_call_participant_joined', {
+            'conversation_id': convo_id,
+            'user_id': uid,
+            'name': name,
+            'role': current_user.role,
+            'participants': _participants_payload(convo_id),
+        }, room=f'user_{other_id}')
 
 
 @socketio.on('group_call_leave')
 def handle_group_call_leave(data):
-    """Student leaves the group call."""
+    """Student leaves the call but the call continues for everyone else."""
     convo_id = int(data.get('conversation_id') or 0)
     call_info = group_calls.get(convo_id)
+    if not call_info:
+        return
 
-    student_name = current_user.display_name or (
-        current_user.profile.full_name if current_user.profile else current_user.email
-    )
+    uid = current_user.user_id
+    call_info.get('participants', {}).pop(uid, None)
 
-    if call_info:
+    # Tell everyone else
+    for other_id in list(call_info['participants'].keys()):
         socketio.emit('group_call_participant_left', {
             'conversation_id': convo_id,
-            'user_id': current_user.user_id,
-            'name': student_name,
-        }, room=f'user_{call_info["teacher_id"]}')
+            'user_id': uid,
+            'participants': _participants_payload(convo_id),
+        }, room=f'user_{other_id}')
 
+    # Confirm to the leaver
     emit('group_call_left', {'conversation_id': convo_id})
 
 
 @socketio.on('group_call_end')
 def handle_group_call_end(data):
-    """Teacher ends the group call for everyone."""
     if current_user.role not in ('teacher', 'admin'):
         return
 
@@ -1648,7 +1691,6 @@ def handle_group_call_end(data):
                 log.duration = int((log.ended_at - log.started_at).total_seconds())
             db.session.commit()
 
-    # Broadcast end to everyone in the room
     socketio.emit('group_call_ended', {
         'conversation_id': convo_id,
         'ended_by': current_user.user_id,
@@ -1657,7 +1699,6 @@ def handle_group_call_end(data):
 
 @socketio.on('group_webrtc_offer')
 def handle_group_offer(data):
-    """Relay WebRTC offer between two participants."""
     emit('group_webrtc_offer', {
         'from_id': current_user.user_id,
         'sdp': data['sdp'],
@@ -1678,6 +1719,30 @@ def handle_group_ice(data):
         'from_id': current_user.user_id,
         'candidate': data['candidate'],
     }, room=f"user_{data['to_id']}")
+
+
+@socketio.on('group_call_state')
+def handle_group_call_state(data):
+    """Client asks: is there an active call in this conversation?"""
+    convo_id = int(data.get('conversation_id') or 0)
+    info = group_calls.get(convo_id)
+    if not info:
+        emit('group_call_state_response', {
+            'conversation_id': convo_id,
+            'active': False,
+        })
+        return
+
+    uid = current_user.user_id
+    emit('group_call_state_response', {
+        'conversation_id': convo_id,
+        'active': True,
+        'call_id': info['call_id'],
+        'teacher_id': info['teacher_id'],
+        'teacher_name': info['teacher_name'],
+        'participants': _participants_payload(convo_id),
+        'already_in': uid in info.get('participants', {}),
+    })
 
 
 # ==================================================================

@@ -36,16 +36,43 @@
 </div>
 
 <!-- ===================================================== -->
+<!-- JOIN CALL BANNER (shown when a call is active but I'm not in) -->
+<!-- ===================================================== -->
+<div id="joinCallBanner"
+     style="display:none;background:#1a3d2a;border:1px solid #2a4a3a;
+            border-radius:12px;padding:12px 16px;margin-bottom:16px;
+            align-items:center;justify-content:space-between;gap:10px;">
+  <div>
+    <strong style="color:#6ee7a7;">📞 Group call in progress</strong>
+    <div id="joinCallSub" style="font-size:12px;color:#b8b8c0;margin-top:2px;">
+      Tap to join the call
+    </div>
+  </div>
+  <button type="button" class="btn" id="joinCallBtn">🎧 Join Call</button>
+</div>
+
+<!-- ===================================================== -->
 <!-- WORKSPACE                                             -->
 <!-- ===================================================== -->
 <div id="workspace" style="display:flex;gap:14px;align-items:flex-start;">
 
   <!-- CALL PANEL -->
-  <div id="callPanel" style="display:none;flex:0 0 300px;">
+  <div id="callPanel" style="display:none;flex:0 0 320px;">
     <div class="card" style="text-align:center;">
       <h2 style="margin-bottom:12px;">📞 Live Call</h2>
+
       <div style="margin:14px 0;color:#f0b429;font-weight:600;" id="activeName">—</div>
-      <div id="callTimer" style="font-size:32px;font-weight:700;margin:10px 0;">00:00</div>
+      <div id="callTimer" style="font-size:28px;font-weight:700;margin:10px 0;">00:00</div>
+
+      <!-- Participant list (WhatsApp style) -->
+      <div id="participantList"
+           style="font-size:12px;color:#b8b8c0;margin:10px 0;
+                  max-height:160px;overflow-y:auto;text-align:left;
+                  background:#0f0f12;border:1px solid #2a2a30;
+                  border-radius:8px;padding:8px;">
+        <em style="color:#888;">Waiting for others to join…</em>
+      </div>
+
       <div style="font-size:12px;color:#888;margin-bottom:16px;">
         Talk while you chat — share photos, videos, or text
         without leaving the call.
@@ -180,7 +207,6 @@
   </button>
 </div>
 
-<!-- Hidden audio outputs -->
 <audio id="remoteAudio" autoplay playsinline webkit-playsinline></audio>
 <div id="remoteAudios" style="display:none;"></div>
 
@@ -241,13 +267,14 @@
       font-size: 14px;
       margin-bottom: 6px !important;
     }
+    #participantList { max-height: 100px; }
 
     body.in-call main {
-      padding-top: 190px;
+      padding-top: 260px;
     }
 
     #messages {
-      max-height: calc(100dvh - 340px);
+      max-height: calc(100dvh - 400px);
       min-height: 180px;
     }
 
@@ -267,7 +294,7 @@
 
 <script>
 // =====================================================
-// PHASE 1 — DOM + HTTP (runs immediately, no socket)
+// PHASE 1 — DOM + HTTP (no socket needed)
 // =====================================================
 (function () {
   const CONVO_ID = Number({{ convo.conversation_id | tojson }});
@@ -306,7 +333,7 @@
     });
   }
 
-  // ---------- File input label ----------
+  // ---------- File label ----------
   fileInput.addEventListener('change', () => {
     const f = fileInput.files[0];
     if (!f) { fileName.textContent = ''; return; }
@@ -523,20 +550,22 @@
       submitBtn.textContent = oldLabel;
     }
   });
+
   window.__openLightbox  = openLightbox;
   window.__deleteMessage = deleteMessage;
   window.__chat = { CONVO_ID, MY_ID, MY_NAME, MY_ROLE, renderMessage, renderedIds };
 })();
 
 // =====================================================
-// PHASE 2 — Socket listeners + WebRTC (group calls only)
+// PHASE 2 — Socket listeners + WebRTC (group calls)
 // =====================================================
 (function () {
   function attach() {
     const socket = window.appSocket;
     if (!socket) return false;
 
-    const { CONVO_ID, MY_ID, MY_NAME, MY_ROLE, renderMessage, renderedIds } = window.__chat;    const IS_TEACHER = (MY_ROLE === 'teacher' || MY_ROLE === 'admin');
+    const { CONVO_ID, MY_ID, MY_NAME, MY_ROLE, renderMessage, renderedIds } = window.__chat;
+    const IS_TEACHER = (MY_ROLE === 'teacher' || MY_ROLE === 'admin');
 
     // ---------- Incoming chat messages ----------
     socket.on('new_message', (m) => {
@@ -544,7 +573,6 @@
       renderMessage(m);
     });
 
-    // ---------- Message deleted (server broadcast) ----------
     socket.on('message_deleted', (data) => {
       if (Number(data.conversation_id) !== CONVO_ID) return;
       const el = document.querySelector(`[data-message-id="${data.message_id}"]`);
@@ -553,7 +581,7 @@
     });
 
     // =====================================================
-    // Media — mic helpers
+    // Mic helpers
     // =====================================================
     let localStream = null;
 
@@ -564,14 +592,20 @@
         localStream.getTracks().forEach(t => t.stop());
         localStream = null;
       }
-      localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: false
-      });
+
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: { ideal: true },
+            noiseSuppression: { ideal: true },
+            autoGainControl:    { ideal: true },
+          },
+          video: false
+        });
+      } catch (err) {
+        console.warn('[mic] constrained attempt failed, falling back:', err.name);
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      }
       return localStream;
     }
 
@@ -583,16 +617,20 @@
     }
 
     // =====================================================
-    // Call-related DOM
+    // Call DOM refs
     // =====================================================
-    const callPanel     = document.getElementById('callPanel');
-    const incomingModal = document.getElementById('incomingCall');
-    const acceptBtn     = document.getElementById('acceptBtn');
-    const declineBtn    = document.getElementById('declineBtn');
-    const hangupBtn     = document.getElementById('hangupBtn');
-    const leaveBtn      = document.getElementById('leaveBtn');
-    const muteBtn       = document.getElementById('muteBtn');
-    const callPickerBtn = document.getElementById('callPickerBtn');
+    const callPanel       = document.getElementById('callPanel');
+    const incomingModal   = document.getElementById('incomingCall');
+    const acceptBtn       = document.getElementById('acceptBtn');
+    const declineBtn      = document.getElementById('declineBtn');
+    const hangupBtn       = document.getElementById('hangupBtn');
+    const leaveBtn        = document.getElementById('leaveBtn');
+    const muteBtn         = document.getElementById('muteBtn');
+    const callPickerBtn   = document.getElementById('callPickerBtn');
+    const joinCallBanner  = document.getElementById('joinCallBanner');
+    const joinCallSub     = document.getElementById('joinCallSub');
+    const joinCallBtn     = document.getElementById('joinCallBtn');
+    const participantList = document.getElementById('participantList');
 
     const RTC_CONFIG = {
       iceServers: [
@@ -602,18 +640,36 @@
     };
 
     // =====================================================
-    // Group call state
+    // Group call state  (single source of truth)
     // =====================================================
     const groupCall = {
-      active: false,
-      convoId: CONVO_ID,
+      active: false,          // a call exists
+      joined: false,          // I'm inside the call
       teacherId: null,
       teacherName: null,
       callId: null,
-      peers: new Map(),    // peerId -> { pc, audioEl, name }
+      peers: new Map(),       // peerId -> { pc, audioEl, name, pendingIce }
       muted: false,
+      participants: [],       // [{user_id, name}]
     };
     let isMicMuted = false;
+
+    // ---------- UI updates ----------
+    function renderParticipants() {
+      if (!participantList) return;
+      if (!groupCall.participants.length) {
+        participantList.innerHTML = '<em style="color:#888;">No one yet…</em>';
+        return;
+      }
+      participantList.innerHTML = groupCall.participants.map(p => {
+        const isMe = Number(p.user_id) === MY_ID;
+        const isTeacher = Number(p.user_id) === Number(groupCall.teacherId);
+        return `<div style="padding:4px 0;display:flex;justify-content:space-between;">
+          <span>${isMe ? '🫵 ' : ''}${p.name}</span>
+          <span style="color:#888;font-size:11px;">${isTeacher ? 'teacher' : 'student'}</span>
+        </div>`;
+      }).join('');
+    }
 
     function updateMuteBtn() {
       if (!muteBtn) return;
@@ -629,6 +685,7 @@
       callPanel.style.display = 'block';
       document.body.classList.add('in-call');
       window.__inCall = true;
+      renderParticipants();
     }
 
     function hideGroupCallPanel() {
@@ -638,8 +695,17 @@
       window.__inCall = false;
     }
 
+    function showJoinBanner(label) {
+      if (!joinCallBanner) return;
+      if (joinCallSub) joinCallSub.textContent = label || 'Tap to join the call';
+      joinCallBanner.style.display = 'flex';
+    }
+    function hideJoinBanner() {
+      if (joinCallBanner) joinCallBanner.style.display = 'none';
+    }
+
     // =====================================================
-    // Create a peer connection to another participant
+    // Peer management
     // =====================================================
     async function createGroupPeer(peerId, peerName, sendOffer) {
       if (!localStream) await getMic();
@@ -658,8 +724,7 @@
         audioEl.srcObject = e.streams[0];
         const p = audioEl.play();
         if (p && p.catch) {
-          p.catch((err) => {
-            console.warn('[audio] play() rejected:', err);
+          p.catch(() => {
             const retry = () => audioEl.play().catch(() => {});
             document.addEventListener('touchend', retry, { once: true });
             document.addEventListener('click', retry, { once: true });
@@ -677,7 +742,7 @@
         console.log('[webrtc] peer', peerId, 'state =', pc.connectionState);
       };
 
-      groupCall.peers.set(peerId, { pc, audioEl, name: peerName });
+      groupCall.peers.set(peerId, { pc, audioEl, name: peerName, pendingIce: [] });
 
       if (sendOffer) {
         const offer = await pc.createOffer();
@@ -698,34 +763,67 @@
       groupCall.peers.delete(peerId);
     }
 
-    async function endGroupCallLocal() {
+    // =====================================================
+    // Local transitions
+    // =====================================================
+    async function joinCallNow() {
+      try {
+        await getMic();
+        socket.emit('group_call_join', { conversation_id: CONVO_ID });
+      } catch (err) {
+        console.error('[join] mic failed:', err);
+        alert('Could not access microphone. ' + err.message);
+      }
+    }
+
+    async function leaveCallLocal() {
       for (const peerId of Array.from(groupCall.peers.keys())) {
         closeGroupPeer(peerId);
       }
+      await stopLocalStream();
+      groupCall.joined = false;
+      isMicMuted = false;
+      updateMuteBtn();
+      hideGroupCallPanel();
+      if (groupCall.active) {
+        showJoinBanner(
+          `${groupCall.teacherName || 'Teacher'} · ${groupCall.participants.length} on call — tap to rejoin`
+        );
+      }
+    }
+
+    async function endCallLocal() {
+      await leaveCallLocal();
       groupCall.active = false;
       groupCall.teacherId = null;
       groupCall.callId = null;
-      await stopLocalStream();
-      hideGroupCallPanel();
-      isMicMuted = false;
-      updateMuteBtn();
+      groupCall.participants = [];
+      hideJoinBanner();
+      renderParticipants();
     }
 
     // =====================================================
-    // Teacher: start the group call
+    // Button wiring
     // =====================================================
+
+    // Teacher starts the call
     if (callPickerBtn && IS_TEACHER) {
       callPickerBtn.onclick = async () => {
+        if (groupCall.active) {
+          alert('You already have a call in progress.');
+          return;
+        }
         try {
-          if (groupCall.active) {
-            alert('You already have a call in progress.');
-            return;
-          }
           await getMic();
+
           groupCall.active = true;
+          groupCall.joined = true;
           groupCall.teacherId = MY_ID;
           groupCall.teacherName = MY_NAME;
-          showGroupCallPanel('Starting group call…');
+          groupCall.participants = [{ user_id: MY_ID, name: MY_NAME }];
+          showGroupCallPanel(`${MY_NAME} · Starting…`);
+          hideJoinBanner();
+
           socket.emit('group_call_start', { conversation_id: CONVO_ID });
         } catch (err) {
           console.error('[group-call] mic failed:', err);
@@ -736,9 +834,7 @@
       };
     }
 
-    // =====================================================
-    // Mute button
-    // =====================================================
+    // Mute toggle
     if (muteBtn) {
       muteBtn.onclick = () => {
         if (!localStream) return;
@@ -749,64 +845,71 @@
       };
     }
 
-    // =====================================================
-    // Accept / Decline / Leave / End
-    // =====================================================
+    // Incoming-call modal buttons
     if (acceptBtn) {
       acceptBtn.onclick = async () => {
-        try {
-          await getMic();
-          incomingModal.style.display = 'none';
-          socket.emit('group_call_join', { conversation_id: CONVO_ID });
-        } catch (err) {
-          console.error('[group-accept] failed:', err);
-          alert('Mic denied.');
-          incomingModal.style.display = 'none';
-          endGroupCallLocal();
+        if (incomingModal) incomingModal.style.display = 'none';
+        await joinCallNow();
+      };
+    }
+    if (declineBtn) {
+      declineBtn.onclick = () => {
+        if (incomingModal) incomingModal.style.display = 'none';
+        if (groupCall.active) {
+          showJoinBanner(
+            `${groupCall.teacherName || 'Teacher'} · ${groupCall.participants.length} on call`
+          );
         }
       };
     }
 
-    if (declineBtn) {
-      declineBtn.onclick = () => {
-        incomingModal.style.display = 'none';
-        endGroupCallLocal();
+    // Join Call banner
+    if (joinCallBtn) {
+      joinCallBtn.onclick = async () => {
+        await joinCallNow();
       };
     }
 
+    // Leave / End
     if (leaveBtn) {
       leaveBtn.onclick = async () => {
         socket.emit('group_call_leave', { conversation_id: CONVO_ID });
-        await endGroupCallLocal();
+        await leaveCallLocal();
       };
     }
-
     if (hangupBtn) {
       hangupBtn.onclick = async () => {
         socket.emit('group_call_end', { conversation_id: CONVO_ID });
-        await endGroupCallLocal();
+        await endCallLocal();
       };
     }
 
     // =====================================================
-    // Server → Client group call events
+    // Server → client events
     // =====================================================
-
-    // Teacher confirms call started
     socket.on('group_call_started', (data) => {
       if (Number(data.conversation_id) !== CONVO_ID) return;
+      groupCall.active = true;
+      groupCall.joined = true;
       groupCall.callId = data.call_id;
+      groupCall.teacherId = data.teacher_id || MY_ID;
+      groupCall.teacherName = data.teacher_name;
+      groupCall.participants = data.participants || [];
       showGroupCallPanel(`${data.teacher_name} · Group Call`);
+      hideJoinBanner();
+      renderParticipants();
     });
 
-    // Student receives the ring
     socket.on('group_call_ringing', (data) => {
       if (Number(data.conversation_id) !== CONVO_ID) return;
       if (IS_TEACHER) return;
 
+      groupCall.active = true;
       groupCall.teacherId = Number(data.teacher_id);
       groupCall.teacherName = data.teacher_name;
       groupCall.callId = data.call_id;
+
+      if (groupCall.joined) return;
 
       const callerNameEl = document.getElementById('callerName');
       if (callerNameEl) {
@@ -815,48 +918,99 @@
       if (incomingModal) incomingModal.style.display = 'flex';
     });
 
-    // Student's own join confirmed — create a peer to the teacher
     socket.on('group_call_joined', async (data) => {
       if (Number(data.conversation_id) !== CONVO_ID) return;
       groupCall.active = true;
+      groupCall.joined = true;
       groupCall.teacherId = Number(data.teacher_id);
       groupCall.callId = data.call_id;
+      groupCall.participants = data.participants || [];
+
       showGroupCallPanel(`${data.teacher_name} · Group Call`);
-      await createGroupPeer(Number(data.teacher_id), data.teacher_name, true);
+      hideJoinBanner();
+      renderParticipants();
+
+      // Connect to everyone else (skip peers we already have)
+      for (const p of groupCall.participants) {
+        const peerId = Number(p.user_id);
+        if (peerId === MY_ID) continue;
+        if (groupCall.peers.has(peerId)) continue;
+        const sendOffer = MY_ID > peerId;
+        await createGroupPeer(peerId, p.name || String(peerId), sendOffer);
+      }
     });
 
-    // Teacher is notified a student joined
-    socket.on('group_call_participant_joined', (data) => {
+    socket.on('group_call_participant_joined', async (data) => {
       if (Number(data.conversation_id) !== CONVO_ID) return;
-      if (!groupCall.active) return;
-      const panel = document.getElementById('activeName');
-      if (panel) panel.textContent =
-        `${groupCall.teacherName} · ${groupCall.peers.size + 1} on call`;
+      groupCall.participants = data.participants || [];
+
+      if (groupCall.joined) {
+        renderParticipants();
+        const panel = document.getElementById('activeName');
+        if (panel) panel.textContent =
+          `${groupCall.teacherName} · ${groupCall.participants.length} on call`;
+
+        const peerId = Number(data.user_id);
+        if (peerId !== MY_ID && !groupCall.peers.has(peerId)) {
+          const sendOffer = MY_ID > peerId;
+          if (sendOffer) {
+            await createGroupPeer(peerId, data.name || String(peerId), true);
+          }
+        }
+      } else if (groupCall.active) {
+        showJoinBanner(
+          `${groupCall.teacherName} · ${groupCall.participants.length} on call`
+        );
+      }
     });
 
-    // A participant left (or disconnected)
     socket.on('group_call_participant_left', (data) => {
       if (Number(data.conversation_id) !== CONVO_ID) return;
+      groupCall.participants = data.participants || [];
       closeGroupPeer(Number(data.user_id));
-      const panel = document.getElementById('activeName');
-      if (panel) panel.textContent =
-        `${groupCall.teacherName} · ${groupCall.peers.size} on call`;
+      if (groupCall.joined) {
+        renderParticipants();
+        const panel = document.getElementById('activeName');
+        if (panel) panel.textContent =
+          `${groupCall.teacherName} · ${groupCall.participants.length} on call`;
+      }
     });
 
-    // Call fully ended (teacher ended or disconnect cleanup)
     socket.on('group_call_ended', async () => {
-      await endGroupCallLocal();
+      await endCallLocal();
       alert('Group call ended.');
     });
 
-    // Student's own leave confirmed by server
     socket.on('group_call_left', async () => {
-      await endGroupCallLocal();
+      groupCall.joined = false;
+      await leaveCallLocal();
     });
 
-    // =====================================================
-    // WebRTC signaling relay
-    // =====================================================
+    // Ask server if a call is already active on page load
+    socket.emit('group_call_state', { conversation_id: CONVO_ID });
+
+    socket.on('group_call_state_response', async (data) => {
+      if (Number(data.conversation_id) !== CONVO_ID) return;
+      if (!data.active) {
+        hideJoinBanner();
+        return;
+      }
+      groupCall.active = true;
+      groupCall.teacherId = Number(data.teacher_id);
+      groupCall.teacherName = data.teacher_name;
+      groupCall.callId = data.call_id;
+      groupCall.participants = data.participants || [];
+      renderParticipants();
+
+      if (data.already_in) {
+        await joinCallNow();
+      } else {
+        showJoinBanner(
+          `${data.teacher_name} · ${data.participants.length} on call`
+        );
+      }
+    });
+
     // =====================================================
     // WebRTC signaling relay
     // =====================================================
@@ -864,13 +1018,11 @@
       const peerId = Number(data.from_id);
       try {
         if (!groupCall.peers.has(peerId)) {
-          await createGroupPeer(peerId, peerId, false);
+          await createGroupPeer(peerId, String(peerId), false);
         }
         const entry = groupCall.peers.get(peerId);
-
         await entry.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
 
-        // Flush any ICE candidates that arrived before the offer
         if (entry.pendingIce && entry.pendingIce.length) {
           for (const c of entry.pendingIce) {
             try { await entry.pc.addIceCandidate(c); }
@@ -892,7 +1044,6 @@
       if (!entry) return;
       try {
         await entry.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-
         if (entry.pendingIce && entry.pendingIce.length) {
           for (const c of entry.pendingIce) {
             try { await entry.pc.addIceCandidate(c); }
@@ -910,25 +1061,18 @@
       const entry = groupCall.peers.get(peerId);
       if (!entry) return;
 
-      const pc = entry.pc;
       const candidate = new RTCIceCandidate(data.candidate);
-
-      // Queue if remote description isn't set yet
-      if (!pc.remoteDescription || !pc.remoteDescription.type) {
+      if (!entry.pc.remoteDescription || !entry.pc.remoteDescription.type) {
         if (!entry.pendingIce) entry.pendingIce = [];
         entry.pendingIce.push(candidate);
         return;
       }
-
-      try {
-        await pc.addIceCandidate(candidate);
-      } catch (e) {
-        console.warn('ICE error', e);
-      }
+      try { await entry.pc.addIceCandidate(candidate); }
+      catch (e) { console.warn('ICE error', e); }
     });
 
     // =====================================================
-    // User-interaction flag (for auto-refresh poller)
+    // User-interaction flag (for auto-refresh poller in base.html)
     // =====================================================
     let interactionTimer = null;
     ['input', 'keydown'].forEach(evt => {
